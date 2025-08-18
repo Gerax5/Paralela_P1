@@ -60,7 +60,7 @@ int main(int argc, char** argv) {
     Ball* balls = (Ball*)malloc(sizeof(Ball) * (size_t)N);
     if (!balls) { fprintf(stderr, "Sin memoria\n"); return 1; }
 
-    const float golden = 2.39996322972865332f; // ~137.5° en radianes
+    const float golden = 2.39996322972865332f; 
     float scale = (fminf((float)W, (float)H) * 0.47f) / fmaxf(1.0f, sqrtf((float)N));
 
     for (int i = 0; i < N; ++i) {
@@ -81,25 +81,21 @@ int main(int argc, char** argv) {
         balls[i].c = (SDL_Color){ R, G, B, 255 };
     }
 
-    // timing
     Uint64 freq = SDL_GetPerformanceFrequency();
     Uint64 last = SDL_GetPerformanceCounter();
 
     bool running = true;
     while (running) {
-        // eventos
         SDL_Event e;
         while (SDL_PollEvent(&e)) {
             if (e.type == SDL_QUIT) running = false;
             if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_ESCAPE) running = false;
         }
 
-        // dt
         Uint64 now = SDL_GetPerformanceCounter();
         double dt = (double)(now - last) / (double)freq;
         last = now;
 
-        // actualizar
         for (int i = 0; i < N; ++i) {
             Ball* b = &balls[i];
             b->x += b->vx * (float)dt;
