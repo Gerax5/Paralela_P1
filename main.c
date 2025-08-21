@@ -4,527 +4,296 @@
 #include <stdlib.h>
 #include <stdbool.h>
 #include <time.h>
-#include <string.h>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
-#define CLAMP01(x) ((x)<0?0:((x)>1?1:(x)))
+#define CLAMP(x,a,b) ((x)<(a)?(a):((x)>(b)?(b):(x)))
 
-typedef struct { float x,y,z, vx,vy,vz; } Node;
-typedef struct { int a,b; } Edge;
+typedef struct { float x,y; } Vec2;
+static inline Vec2 v_add(Vec2 a, Vec2 b){ return (Vec2){a.x+b.x,a.y+b.y}; }
+static inline Vec2 v_sub(Vec2 a, Vec2 b){ return (Vec2){a.x-b.x,a.y-b.y}; }
+static inline Vec2 v_scale(Vec2 a,float s){ return (Vec2){a.x*s,a.y*s}; }
+static inline float v_len2(Vec2 a){ return a.x*a.x + a.y*a.y; }
+static inline float v_len(Vec2 a){ float L=v_len2(a); return L>0?sqrtf(L):0.0f; }
+static inline Vec2 v_norm(Vec2 a){ float L=v_len(a); return (L>1e-6f)? v_scale(a,1.0f/L) : (Vec2){0,0}; }
+static inline Vec2 v_perp(Vec2 a){ return (Vec2){-a.y, a.x}; }
 
-typedef struct {
-    Edge* data;
-    int size;
-    int cap;
-} EdgeVec;
+typedef struct { float x,y,theta,strength,sep; } Dipole; // dipolo = dos cargas +/- separadas
+typedef struct { Vec2 p; } Particle;
 
-static void edges_init(EdgeVec* v){ v->data=NULL; v->size=0; v->cap=0; }
-static void edges_free(EdgeVec* v){ free(v->data); v->data=NULL; v->size=v->cap=0; }
-static void edges_clear(EdgeVec* v){ v->size=0; }
-static void edges_reserve(EdgeVec* v, int need){
-    if (need <= v->cap) return;
-    int newcap = v->cap? v->cap: 1024;
-    while (newcap < need) newcap = newcap*2;
-    v->data = (Edge*)realloc(v->data, sizeof(Edge)*newcap);
-    v->cap = newcap;
-}
-static void edges_push(EdgeVec* v, Edge e){
-    if (v->size == v->cap) edges_reserve(v, v->cap? v->cap*2 : 1024);
-    v->data[v->size++] = e;
-}
-
-static float frand01(void){ return (float)rand()/(float)RAND_MAX; }
-static float frand_range(float a,float b){ return a + (b-a)*frand01(); }
-
+// ---------- Color (HSV -> RGB) ----------
 static SDL_Color hsv_to_rgb(float h, float s, float v, Uint8 a){
-    while (h < 0) h += 360.0f; while (h >= 360.0f) h -= 360.0f;
-    float c = v * s;
-    float x = c * (1 - fabsf(fmodf(h/60.0f, 2.0f) - 1.0f));
-    float m = v - c;
+    while(h<0)h+=360; while(h>=360)h-=360;
+    float c=v*s, x=c*(1-fabsf(fmodf(h/60.0f,2.0f)-1.0f)), m=v-c;
     float r=0,g=0,b=0;
-    if      (h < 60)  { r=c; g=x; }
-    else if (h < 120) { r=x; g=c; }
-    else if (h < 180) { g=c; b=x; }
-    else if (h < 240) { g=x; b=c; }
-    else if (h < 300) { r=x; b=c; }
-    else              { r=c; b=x; }
-    SDL_Color col;
-    col.r = (Uint8)((r+m)*255);
-    col.g = (Uint8)((g+m)*255);
-    col.b = (Uint8)((b+m)*255);
-    col.a = a;
+    if      (h< 60){ r=c; g=x; }
+    else if (h<120){ r=x; g=c; }
+    else if (h<180){ g=c; b=x; }
+    else if (h<240){ g=x; b=c; }
+    else if (h<300){ r=x; b=c; }
+    else           { r=c; b=x; }
+    SDL_Color col={(Uint8)((r+m)*255),(Uint8)((g+m)*255),(Uint8)((b+m)*255),a};
     return col;
 }
 static void set_col(SDL_Renderer* r, SDL_Color c){ SDL_SetRenderDrawColor(r,c.r,c.g,c.b,c.a); }
-static SDL_Color shade(SDL_Color c, float k){
-    k = CLAMP01(k);
-    SDL_Color o = { (Uint8)(c.r*k), (Uint8)(c.g*k), (Uint8)(c.b*k), c.a };
-    return o;
-}
 
-static void draw_filled_circle(SDL_Renderer* r, int cx, int cy, int radius, SDL_Color col){
-    set_col(r,col);
-    for (int dy = -radius; dy <= radius; ++dy){
-        int y = cy + dy;
-        int dx = (int)sqrtf((float)(radius*radius - dy*dy));
-        SDL_RenderDrawLine(r, cx - dx, y, cx + dx, y);
-    }
-}
-static void draw_line_thick(SDL_Renderer* r, int x1,int y1,int x2,int y2, int thick, SDL_Color c){
-    if (thick <= 1){
-        set_col(r,c);
-        SDL_RenderDrawLine(r, x1,y1, x2,y2);
-        return;
-    }
+// ---------- Triángulo relleno ----------
+static void draw_filled_triangle(SDL_Renderer* r, int x0,int y0,int x1,int y1,int x2,int y2, SDL_Color c){
+    // orden por y
+    if (y1<y0){ int tx=x0,ty=y0; x0=x1;y0=y1; x1=tx;y1=ty; }
+    if (y2<y0){ int tx=x0,ty=y0; x0=x2;y0=y2; x2=tx;y2=ty; }
+    if (y2<y1){ int tx=x1,ty=y1; x1=x2;y1=y2; x2=tx;y2=ty; }
     set_col(r,c);
-    float dx = (float)(x2-x1), dy = (float)(y2-y1);
-    float len = sqrtf(dx*dx + dy*dy);
-    if (len < 1e-3f){ SDL_RenderDrawPoint(r,x1,y1); return; }
-    float nx = -dy/len, ny = dx/len;
-    int half = thick/2;
-    for (int i=-half; i<=half; ++i){
-        int ox = (int)roundf(nx*i), oy = (int)roundf(ny*i);
-        SDL_RenderDrawLine(r, x1+ox,y1+oy, x2+ox,y2+oy);
-    }
+    if (y0==y2) return;
+    float dx02 = (y2!=y0)? (float)(x2-x0)/(float)(y2-y0):0;
+    float dx01 = (y1!=y0)? (float)(x1-x0)/(float)(y1-y0):0;
+    float dx12 = (y2!=y1)? (float)(x2-x1)/(float)(y2-y1):0;
+    float sx=(float)x0, ex=(float)x0;
+    for(int y=y0;y<y1;y++){ SDL_RenderDrawLine(r,(int)roundf(sx),y,(int)roundf(ex),y); sx+=dx02; ex+=dx01; }
+    ex=(float)x1;
+    for(int y=y1;y<=y2;y++){ SDL_RenderDrawLine(r,(int)roundf(sx),y,(int)roundf(ex),y); sx+=dx02; ex+=dx12; }
 }
 
-static bool project_perspective(float vx,float vy,float vz,
-                                int W,int H, float fov, float camz,
-                                int* sx,int* sy, float* zout){
-    float z = vz + camz;
-    if (z <= 1e-3f) return false;
-    float s = fov / z;
-    *sx = W/2 + (int)roundf(vx * s);
-    *sy = H/2 - (int)roundf(vy * s);
-    if (zout) *zout = z;
-    return true;
+// ---------- Aleatorio ----------
+static float frand01(void){ return (float)rand()/(float)RAND_MAX; }
+static float frand_r(float a,float b){ return a + (b-a)*frand01(); }
+
+// ---------- Campo vectorial ----------
+typedef enum { FIELD_DIPOLE=0, FIELD_MONO=1, FIELD_SWIRL=2 } FieldType;
+
+static Vec2 contrib_charge(Vec2 p, Vec2 c, float q, float soft, float alpha){
+    // E ~ q * (p - c) / (|p-c|^2 + soft)^alpha ; alpha=1 ~ “visual” 1/r^2 en 2D
+    Vec2 d = v_sub(p,c);
+    float r2 = v_len2(d) + soft;
+    float k  = q / powf(r2, alpha);
+    return v_scale(d, k);
 }
 
-static void spawn_cloud(Node* nodes, int N, int W, int H, float fov, float zmin, float zmax, int margin){
-    for (int i=0;i<N;i++){
-        float z = frand_range(zmin, zmax);
-        float s = fov / (z + 1e-6f);
-        float x_range = (W/2 - margin) / s;
-        float y_range = (H/2 - margin) / s;
-        nodes[i].x = frand_range(-x_range, x_range);
-        nodes[i].y = frand_range(-y_range, y_range);
-        nodes[i].z = z;
-        nodes[i].vx = frand_range(-30.0f, 30.0f);
-        nodes[i].vy = frand_range(-30.0f, 30.0f);
-        nodes[i].vz = frand_range(-15.0f, 15.0f);
-    }
+// Helpers 100% C para acumular contribuciones
+static inline void add_dipole_acc(Vec2 p, const Dipole* d, Vec2* F, float soft, float alpha){
+    float cs = cosf(d->theta), sn = sinf(d->theta);
+    Vec2 dir   = (Vec2){ cs, sn };
+    Vec2 rPlus = v_add((Vec2){d->x, d->y}, v_scale(dir, +d->sep*0.5f));
+    Vec2 rMin  = v_add((Vec2){d->x, d->y}, v_scale(dir, -d->sep*0.5f));
+    *F = v_add(*F, contrib_charge(p, rPlus, +d->strength, soft, alpha));
+    *F = v_add(*F, contrib_charge(p, rMin , -d->strength, soft, alpha));
 }
-static void update_cloud(Node* n, int N, float dt, int W,int H, float fov,
-                         float zmin,float zmax,int margin, bool drift){
-    for (int i=0;i<N;i++){
-        if (drift){
-            n[i].x += n[i].vx * dt;
-            n[i].y += n[i].vy * dt;
-            n[i].z += n[i].vz * dt;
-        }
-        if (n[i].z < zmin){ n[i].z = zmin; n[i].vz = fabsf(n[i].vz); }
-        if (n[i].z > zmax){ n[i].z = zmax; n[i].vz = -fabsf(n[i].vz); }
-
-        float s = fov / (n[i].z + 1e-6f);
-        float x_range = (W/2 - margin) / s;
-        float y_range = (H/2 - margin) / s;
-
-        if (n[i].x < -x_range){ n[i].x = -x_range; n[i].vx = fabsf(n[i].vx); }
-        if (n[i].x >  x_range){ n[i].x =  x_range; n[i].vx = -fabsf(n[i].vx); }
-        if (n[i].y < -y_range){ n[i].y = -y_range; n[i].vy = fabsf(n[i].vy); }
-        if (n[i].y >  y_range){ n[i].y =  y_range; n[i].vy = -fabsf(n[i].vy); }
-    }
+static inline void add_mono_acc(Vec2 p, const Dipole* d, Vec2* F, float soft, float alpha){
+    Vec2 c = (Vec2){ d->x, d->y }; // "monopolo" centrado
+    *F = v_add(*F, contrib_charge(p, c, d->strength, soft, alpha));
 }
 
-typedef struct {
-    int gw, gh, cell;
-    int *head, *next; 
-} Grid;
-
-static void grid_free(Grid* g){
-    free(g->head); free(g->next);
-    g->head = g->next = NULL; g->gw=g->gh=g->cell=0;
-}
-static void grid_build(Grid* g, int W,int H, int cell, const int* sx, int N){
-    g->cell = cell;
-    g->gw = (W + cell - 1) / cell;
-    g->gh = (H + cell - 1) / cell;
-    int cells = g->gw * g->gh;
-    g->head = (int*)malloc(sizeof(int)*cells);
-    g->next = (int*)malloc(sizeof(int)*N);
-    for (int i=0;i<cells;i++) g->head[i] = -1;
-    for (int i=0;i<N;i++){
-        int x = sx[i]; if (x<0) x=0; if (x>=W) x=W-1;
-        
-        g->next[i] = -1;
-    }
-}
-static void grid_build_xy(Grid* g, int W,int H, int cell, const int* sx, const int* sy, int N){
-    g->cell = cell;
-    g->gw = (W + cell - 1) / cell;
-    g->gh = (H + cell - 1) / cell;
-    int cells = g->gw * g->gh;
-    g->head = (int*)malloc(sizeof(int)*cells);
-    g->next = (int*)malloc(sizeof(int)*N);
-    for (int i=0;i<cells;i++) g->head[i] = -1;
-    for (int i=0;i<N;i++){
-        int x = sx[i]; if (x<0) x=0; if (x>=W) x=W-1;
-        int y = sy[i]; if (y<0) y=0; if (y>=H) y=H-1;
-        int gx = x / g->cell;
-        int gy = y / g->cell;
-        int id = gy*g->gw + gx;
-        g->next[i] = g->head[id];
-        g->head[id] = i;
-    }
-}
-
-static inline void grid_cell_bounds(const Grid* g, int W,int H, int cx,int cy, int* valid){
-    *valid = (cx>=0 && cy>=0 && cx<g->gw && cy<g->gh);
-}
-
-typedef struct { float d2; int idx; } Cand;
-static int cmp_cand(const void* a, const void* b){
-    float da = ((const Cand*)a)->d2;
-    float db = ((const Cand*)b)->d2;
-    return (da<db)? -1 : (da>db)? 1 : 0;
-}
-
-static void build_knn_edges_grid(const int* sx,const int* sy,int N,int k,
-                                 int W,int H, int cell, EdgeVec* edges, int* out_k_eff)
+// Campo total en p
+static Vec2 field_at(Vec2 p,
+                     const Dipole* fixed, int fixedCount,
+                     const Dipole* mouseDip,
+                     FieldType kind)
 {
-    if (k < 1) k = 1;
-    edges_reserve(edges, edges->size + N*k);
+    const float soft  = 25.0f; // suavizado
+    const float alpha = 1.0f;  // decaimiento
+    Vec2 F = (Vec2){0,0};
 
-    Grid g={0};
-    grid_build_xy(&g, W,H, cell, sx, sy, N);
-
-    int cap = 64;
-    Cand* tmp = (Cand*)malloc(sizeof(Cand)*cap);
-
-    for (int i=0;i<N;i++){
-        int x = sx[i]; int y = sy[i];
-        int gx = x / g.cell;
-        int gy = y / g.cell;
-
-        int need = k;
-        int got = 0;
-        int maxR = 6; 
-        for (int R=0; R<=maxR && got<need; ++R){
-            for (int dy=-R; dy<=R; ++dy){
-                for (int dx=-R; dx<=R; ++dx){
-                    int cx = gx + dx, cy = gy + dy, valid=0;
-                    grid_cell_bounds(&g, W,H, cx,cy, &valid);
-                    if (!valid) continue;
-                    int head = g.head[cy*g.gw + cx];
-                    for (int j=head; j!=-1; j=g.next[j]){
-                        if (j==i) continue;
-                        if (j <= i) continue;
-                        float ddx = (float)(sx[j]-x);
-                        float ddy = (float)(sy[j]-y);
-                        float d2 = ddx*ddx + ddy*ddy;
-                        if (got == cap){
-                            cap *= 2;
-                            tmp = (Cand*)realloc(tmp, sizeof(Cand)*cap);
-                        }
-                        tmp[got++] = (Cand){ d2, j };
-                    }
-                }
-            }
-            if (got >= need) break;
-        }
-
-        if (got == 0) continue;
-
-        if (got > need){
-            qsort(tmp, got, sizeof(Cand), cmp_cand);
-            got = need;
-        }
-        for (int t=0; t<got; ++t){
-            edges_push(edges, (Edge){ i, tmp[t].idx });
+    // Imanes fijos
+    for (int i=0; i<fixedCount; ++i){
+        if (kind == FIELD_DIPOLE){
+            add_dipole_acc(p, &fixed[i], &F, soft, alpha);
+        } else if (kind == FIELD_MONO){
+            add_mono_acc(p, &fixed[i], &F, soft, alpha);
+        } else { // FIELD_SWIRL: perpendicular a la contribución dipolar
+            Vec2 before = F;
+            add_dipole_acc(p, &fixed[i], &F, soft, alpha);
+            Vec2 inc = v_sub(F, before);
+            F = v_add(before, v_perp(inc));
         }
     }
 
-    if (out_k_eff) *out_k_eff = k;
-    free(tmp);
-    grid_free(&g);
+    // Dipolo del mouse (opcional)
+    if (mouseDip){
+        if (kind == FIELD_DIPOLE){
+            add_dipole_acc(p, mouseDip, &F, soft, alpha);
+        } else if (kind == FIELD_MONO){
+            add_mono_acc(p, mouseDip, &F, soft, alpha);
+        } else { // FIELD_SWIRL
+            Vec2 before = F;
+            add_dipole_acc(p, mouseDip, &F, soft, alpha);
+            Vec2 inc = v_sub(F, before);
+            F = v_add(before, v_perp(inc));
+        }
+    }
+
+    return F;
 }
 
-typedef struct {
-    int* p;
-    int* r;
-    int n;
-    int comps;
-} DSU;
-static void dsu_init(DSU* d, int n){
-    d->p = (int*)malloc(sizeof(int)*n);
-    d->r = (int*)malloc(sizeof(int)*n);
-    d->n = n; d->comps = n;
-    for (int i=0;i<n;i++){ d->p[i]=i; d->r[i]=0; }
-}
-static int dsu_find(DSU* d, int x){
-    while (d->p[x]!=x){ d->p[x] = d->p[d->p[x]]; x = d->p[x]; }
-    return x;
-}
-static bool dsu_union(DSU* d, int a,int b){
-    a = dsu_find(d,a); b = dsu_find(d,b);
-    if (a==b) return false;
-    if (d->r[a] < d->r[b]){ int t=a; a=b; b=t; }
-    d->p[b] = a;
-    if (d->r[a]==d->r[b]) d->r[a]++;
-    d->comps--;
-    return true;
-}
-static void dsu_free(DSU* d){ free(d->p); free(d->r); d->p=d->r=NULL; d->n=d->comps=0; }
+// ---------- Dibujo del vector como triángulo ----------
+static void draw_vector_triangle(SDL_Renderer* ren, Vec2 c, Vec2 v, float scaleLen, float baseW,
+                                 float vmaxColor, float hueBase){
+    float mag = v_len(v);
+    if (mag < 1e-4f) return;
+    Vec2 d = v_scale(v_norm(v), scaleLen * CLAMP(mag / 300.0f, 0.25f, 2.5f));
+    Vec2 n = v_perp(d);
 
-static void connect_components_grid(EdgeVec* edges,
-                                    const int* sx,const int* sy,int N,
-                                    int W,int H,int cell)
-{
-    DSU d; dsu_init(&d, N);
-    for (int e=0; e<edges->size; ++e){
-        dsu_union(&d, edges->data[e].a, edges->data[e].b);
-    }
-    if (d.comps <= 1){ dsu_free(&d); return; }
+    // Geometría del triángulo (punta hacia d)
+    Vec2 tip  = v_add(c, d);
+    Vec2 back = v_add(c, v_scale(d,-0.35f));
+    Vec2 lft  = v_add(back, v_scale(v_norm(n), +baseW));
+    Vec2 rgt  = v_add(back, v_scale(v_norm(n), -baseW));
 
-    Grid g={0}; grid_build_xy(&g, W,H, cell, sx, sy, N);
-
-    int max_iter = N*4; 
-    int iter=0;
-    while (d.comps > 1 && iter<max_iter){
-        iter++;
-        int i = rand()%N;
-        int ci = dsu_find(&d,i);
-        int x = sx[i], y = sy[i];
-        int gx = x / g.cell, gy = y / g.cell;
-
-        float bestD2 = 1e30f; int bestJ = -1;
-        for (int R=0; R<=8; ++R){
-            for (int dy=-R; dy<=R; ++dy){
-                for (int dx=-R; dx<=R; ++dx){
-                    int cx = gx + dx, cy = gy + dy, valid=0;
-                    grid_cell_bounds(&g, W,H, cx,cy, &valid);
-                    if (!valid) continue;
-                    int head = g.head[cy*g.gw + cx];
-                    for (int j=head; j!=-1; j=g.next[j]){
-                        if (dsu_find(&d,j) == ci) continue;
-                        float ddx=(float)(sx[j]-x), ddy=(float)(sy[j]-y);
-                        float d2 = ddx*ddx + ddy*ddy;
-                        if (d2 < bestD2){ bestD2=d2; bestJ=j; }
-                    }
-                }
-            }
-            if (bestJ!=-1) break;
-        }
-        if (bestJ!=-1){
-            edges_push(edges, (Edge){ i, bestJ });
-            dsu_union(&d, i, bestJ);
-        }else{
-            
-            float best=1e30f; int bj=-1;
-            for (int j=0;j<N;j++){
-                if (dsu_find(&d,j) == ci) continue;
-                float dx=(float)(sx[j]-x), dy=(float)(sy[j]-y);
-                float d2 = dx*dx + dy*dy;
-                if (d2<best){ best=d2; bj=j; }
-            }
-            if (bj!=-1){
-                edges_push(edges, (Edge){ i, bj });
-                dsu_union(&d, i, bj);
-            }else break;
-        }
-    }
-    grid_free(&g);
-    dsu_free(&d);
+    float hue = hueBase + 120.0f * CLAMP(mag / vmaxColor, 0.0f, 1.0f);
+    SDL_Color col = hsv_to_rgb(hue, 0.6f, 1.0f, 230);
+    draw_filled_triangle(ren, (int)roundf(tip.x),(int)roundf(tip.y),
+                              (int)roundf(lft.x),(int)roundf(lft.y),
+                              (int)roundf(rgt.x),(int)roundf(rgt.y), col);
 }
 
-static void build_mst_exact(const int* sx,const int* sy,int N, EdgeVec* edges){
-    if (N<=1) return;
-    const float INF = 1e30f;
-    float* dist = (float*)malloc(sizeof(float)*N);
-    int* parent = (int*)malloc(sizeof(int)*N);
-    bool* inSet  = (bool*)malloc(sizeof(bool)*N);
-    for (int i=0;i<N;i++){ dist[i]=INF; parent[i]=-1; inSet[i]=false; }
-    dist[0]=0.0f;
-    for (int it=0; it<N-1; ++it){
-        int u=-1; float best=INF;
-        for (int v=0; v<N; ++v){
-            if (!inSet[v] && dist[v]<best){ best=dist[v]; u=v; }
-        }
-        if (u==-1) break;
-        inSet[u]=true;
-        for (int v=0; v<N; ++v){
-            if (inSet[v] || v==u) continue;
-            float dx=(float)(sx[v]-sx[u]), dy=(float)(sy[v]-sy[u]);
-            float d2 = dx*dx + dy*dy;
-            if (d2 < dist[v]){ dist[v]=d2; parent[v]=u; }
-        }
-    }
-    for (int v=1; v<N; ++v){
-        if (parent[v]!=-1){
-            edges_push(edges, (Edge){ v, parent[v] });
-        }
-    }
-    free(dist); free(parent); free(inSet);
-}
-
-static void render(SDL_Renderer* ren, int W,int H, double t,
-                   Node* nodes,int N, float fov,
-                   int k, bool useMSTExact,bool useConnect,bool useKNN,
-                   bool drawPts,bool drawLines,bool trails, int gridCell)
-{
-    if (!trails){
-        set_col(ren, (SDL_Color){12,15,22,255}); SDL_RenderClear(ren);
-    }else{
-        SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
-        set_col(ren, (SDL_Color){12,15,22,22});
-        SDL_Rect r={0,0,W,H}; SDL_RenderFillRect(ren,&r);
-    }
-
-    // Proyecta
-    int* sx = (int*)malloc(sizeof(int)*N);
-    int* sy = (int*)malloc(sizeof(int)*N);
-    float* zbuf = (float*)malloc(sizeof(float)*N);
-    for (int i=0;i<N;i++){
-        int x,y; float z;
-        project_perspective(nodes[i].x, nodes[i].y, nodes[i].z, W,H, fov, 0.0f, &x,&y,&z);
-        sx[i]=x; sy[i]=y; zbuf[i]=z+1e-6f;
-    }
-
-    EdgeVec edges; edges_init(&edges);
-
-    if (useKNN){
-        int k_eff=0;
-        build_knn_edges_grid(sx,sy,N, k, W,H, gridCell, &edges, &k_eff);
-    }
-    if (useMSTExact){
-        build_mst_exact(sx,sy,N, &edges);
-    }else if (useConnect){
-        connect_components_grid(&edges, sx,sy,N, W,H, gridCell);
-    }
-
-    float hue = fmodf(200.0f + 60.0f*sinf((float)t*0.3f), 360.0f);
-    SDL_Color cLine = hsv_to_rgb(hue, 0.25f, 1.0f, 255);
-    SDL_Color cPts  = hsv_to_rgb(hue+30.0f, 0.35f, 1.0f, 255);
-
-    int thickBase = (edges.size > 150000 ? 1 : 2);
-
-    if (drawLines){
-        for (int e=0; e<edges.size; ++e){
-            int i = edges.data[e].a, j = edges.data[e].b;
-            float zavg = 0.5f*(zbuf[i]+zbuf[j]);
-            float shadeK = CLAMP01(1.25f - (zavg/1200.0f));
-            int thick = thickBase; // puedes hacer 1 + (int)(2.0f*(900.0f/zavg));
-            draw_line_thick(ren, sx[i],sy[i], sx[j],sy[j], thick, shade(cLine, shadeK));
-        }
-    }
-    if (drawPts){
-        for (int i=0;i<N;i++){
-            float kshade = CLAMP01(1.2f - (zbuf[i]/1200.0f));
-            int radius = 1 + (int)fminf(3.0f, 3.0f * (900.0f / zbuf[i]));
-            draw_filled_circle(ren, sx[i], sy[i], radius, shade(cPts, kshade));
-        }
-    }
-
-    edges_free(&edges);
-    free(sx); free(sy); free(zbuf);
-}
-
+// ---------- Programa principal ----------
 int main(int argc, char** argv){
-    int N = 2000;
-    int k = 8;
-    if (argc>=2){ long tmp=strtol(argv[1],NULL,10); if (tmp>=1) N=(int)tmp; }
-    if (argc>=3){ long tmp=strtol(argv[2],NULL,10); if (tmp>=1) k=(int)tmp; }
+    // ---------- argumentos: # de partículas (posicional 1) ----------
+    int P = 3000; // por defecto
+    if (argc >= 2){
+        char* endp = NULL;
+        long v = strtol(argv[1], &endp, 10);
+        if (endp != argv[1] && v >= 0 && v <= 2000000000L){
+            P = (int)v;
+        }
+    }
 
-    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER) != 0){
+    if (SDL_Init(SDL_INIT_VIDEO|SDL_INIT_TIMER)!=0){
         fprintf(stderr,"SDL_Init: %s\n", SDL_GetError()); return 1;
     }
     srand((unsigned)time(NULL));
 
-    const int W=1920, H=1080;
-    SDL_Window* win = SDL_CreateWindow("Puntos sin límites + kNN por grilla",
-                        SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, W,H, 0);
+    const int W=1280, H=800;
+    SDL_Window*  win = SDL_CreateWindow("Magnetic-like Field with Triangles",
+        SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, W,H, 0);
     SDL_Renderer* ren = SDL_CreateRenderer(win,-1, SDL_RENDERER_ACCELERATED|SDL_RENDERER_PRESENTVSYNC);
-    if (!win||!ren){
-        fprintf(stderr,"SDL_Create: %s\n", SDL_GetError());
-        if (ren) SDL_DestroyRenderer(ren);
-        if (win) SDL_DestroyWindow(win);
-        SDL_Quit(); return 1;
-    }
+    if(!win||!ren){ fprintf(stderr,"SDL_Create: %s\n", SDL_GetError()); if(ren)SDL_DestroyRenderer(ren); if(win)SDL_DestroyWindow(win); SDL_Quit(); return 1; }
     SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
 
-    float fov = 900.0f;
-    float zmin = 300.0f, zmax = 900.0f;
-    int margin = 8;
+    // Malla (la dejamos tal cual)
+    int cell = 48; // densidad inicial (64/48/32/24)
+    int nx = (W+cell-1)/cell, ny=(H+cell-1)/cell;
 
-    Node* nodes = (Node*)malloc(sizeof(Node)*N);
-    spawn_cloud(nodes, N, W,H, fov, zmin, zmax, margin);
+    // Partículas (usando P de la línea de comandos)
+    Particle* parts = (Particle*)malloc(sizeof(Particle)*P);
+    for(int i=0;i<P;i++){ parts[i].p=(Vec2){ frand_r(0,W), frand_r(0,H) }; }
 
-    bool running=true;
-    bool useMSTExact=false;     
-    bool useConnect=true;      
-    bool useKNN=true;
-    bool drawPts=true, drawLines=true;
-    bool trails=false, drift=true;
-    int gridCell = 48;          
+    // Imanes fijos
+    int cap=16, count=0;
+    Dipole* fixed = (Dipole*)malloc(sizeof(Dipole)*cap);
 
-    Uint64 freq = SDL_GetPerformanceFrequency();
-    Uint64 last = SDL_GetPerformanceCounter();
-    double t=0.0;
+    // Dipolo del mouse
+    bool useMouseDip=true;
+    Dipole mouse = { W*0.5f, H*0.5f, 0.0f, 8000.0f, 100.0f }; // fuerza y separación
+    float mouseSpeed = 1.0f; // respuesta para seguir al cursor
+    int mx= W/2, my= H/2; Uint32 mbtns=0;
 
-    while (running){
+    // Estado
+    bool drawVectors=true, drawParticles=true, trails=true;
+    FieldType fieldKind = FIELD_DIPOLE;
+
+    Uint64 freq=SDL_GetPerformanceFrequency(), last=SDL_GetPerformanceCounter();
+    double t=0.0; bool running=true;
+
+    while(running){
+        // --- input ---
         SDL_Event e;
-        while (SDL_PollEvent(&e)){
-            if (e.type==SDL_QUIT) running=false;
-            if (e.type==SDL_KEYDOWN){
-                SDL_Keycode Kc = e.key.keysym.sym;
-                if (Kc==SDLK_ESCAPE) running=false;
+        while(SDL_PollEvent(&e)){
+            if(e.type==SDL_QUIT) running=false;
+            if(e.type==SDL_MOUSEMOTION){ mx=e.motion.x; my=e.motion.y; }
+            if(e.type==SDL_MOUSEBUTTONDOWN || e.type==SDL_MOUSEBUTTONUP){ mbtns=SDL_GetMouseState(NULL,NULL); }
+            if(e.type==SDL_MOUSEWHEEL){
+                if(e.wheel.y>0) mouse.strength *= 1.1f;
+                if(e.wheel.y<0) mouse.strength *= 0.9f;
+                mouse.strength = CLAMP(mouse.strength, 1000.0f, 1e7f);
+            }
+            if(e.type==SDL_KEYDOWN){
+                SDL_Keycode k=e.key.keysym.sym;
+                if(k==SDLK_ESCAPE) running=false;
+                if(k==SDLK_q) mouse.theta -= 0.1f;
+                if(k==SDLK_e) mouse.theta += 0.1f;
 
-                if (Kc==SDLK_MINUS){
-                    int newN = N-200; if (newN<1) newN=1;
-                    if (newN!=N){
-                        N=newN; nodes=(Node*)realloc(nodes,sizeof(Node)*N);
-                        spawn_cloud(nodes, N, W,H, fov, zmin, zmax, margin);
-                    }
-                }
-                if (Kc==SDLK_PLUS || Kc==SDLK_EQUALS){
-                    int newN = N+200;
-                    N=newN; nodes=(Node*)realloc(nodes,sizeof(Node)*N);
-                    spawn_cloud(nodes, N, W,H, fov, zmin, zmax, margin);
-                }
-                if (Kc==SDLK_LEFTBRACKET){ if (k>1) k--; }
-                if (Kc==SDLK_RIGHTBRACKET){ k++; }
+                if(k==SDLK_v) drawVectors = !drawVectors;
+                if(k==SDLK_o) drawParticles = !drawParticles;
+                if(k==SDLK_t) trails = !trails;
+                if(k==SDLK_m) useMouseDip = !useMouseDip;
 
-                if (Kc==SDLK_m) useMSTExact = !useMSTExact;
-                if (Kc==SDLK_c) useConnect = !useConnect;
-                if (Kc==SDLK_k) useKNN = !useKNN;
-                if (Kc==SDLK_p) drawPts = !drawPts;
-                if (Kc==SDLK_l) drawLines = !drawLines;
-                if (Kc==SDLK_t) trails = !trails;
-                if (Kc==SDLK_d) drift = !drift;
-                if (Kc==SDLK_g){
-                    if (gridCell==48) gridCell=32;
-                    else if (gridCell==32) gridCell=24;
-                    else if (gridCell==24) gridCell=64;
-                    else gridCell=48;
+                if(k==SDLK_f) fieldKind = (FieldType)((fieldKind+1)%3);
+
+                if(k==SDLK_r){
+                    for(int i=0;i<P;i++) parts[i].p=(Vec2){ frand_r(0,W), frand_r(0,H) };
                 }
-                if (Kc==SDLK_SPACE){
-                    spawn_cloud(nodes, N, W,H, fov, zmin, zmax, margin);
+                if(k==SDLK_PLUS || k==SDLK_EQUALS){
+                    int old=P; P+=1000; parts=(Particle*)realloc(parts,sizeof(Particle)*P);
+                    for(int i=old;i<P;i++) parts[i].p=(Vec2){ frand_r(0,W), frand_r(0,H) };
+                }
+                if(k==SDLK_MINUS){
+                    P -= 1000; if(P<0) P=0; parts=(Particle*)realloc(parts,sizeof(Particle)*P);
+                }
+                if(k==SDLK_g){
+                    if(cell==64) cell=48; else if(cell==48) cell=32; else if(cell==32) cell=24; else cell=64;
+                    nx=(W+cell-1)/cell; ny=(H+cell-1)/cell;
+                }
+            }
+            if(e.type==SDL_MOUSEBUTTONDOWN){
+                if(e.button.button==SDL_BUTTON_LEFT){
+                    if(count==cap){ cap*=2; fixed=(Dipole*)realloc(fixed,sizeof(Dipole)*cap); }
+                    fixed[count++] = (Dipole){ (float)mx,(float)my, mouse.theta, mouse.strength, mouse.sep };
+                }else if(e.button.button==SDL_BUTTON_RIGHT){
+                    if(count>0) count--;
+                }else if(e.button.button==SDL_BUTTON_MIDDLE){
+                    count=0;
                 }
             }
         }
-        Uint64 now = SDL_GetPerformanceCounter();
-        double dt = (double)(now - last) / (double)freq;
-        last = now; t += dt;
 
-        update_cloud(nodes, N, (float)dt, W,H, fov, zmin, zmax, margin, drift);
-        render(ren, W,H, t, nodes, N, fov, k, useMSTExact,useConnect,useKNN,
-               drawPts,drawLines,trails, gridCell);
+        Uint64 now=SDL_GetPerformanceCounter();
+        double dt=(double)(now-last)/(double)freq; last=now; t+=dt;
+        float fdt = (float)dt;
+
+        // mover suavemente el dipolo del mouse hacia el cursor
+        mouse.x = mouse.x + (mx - mouse.x) * CLAMP(mouseSpeed*fdt*10.0f, 0.0f, 1.0f);
+        mouse.y = mouse.y + (my - mouse.y) * CLAMP(mouseSpeed*fdt*10.0f, 0.0f, 1.0f);
+
+        // clear / trails
+        if(!trails){ set_col(ren,(SDL_Color){8,10,16,255}); SDL_RenderClear(ren); }
+        else{ set_col(ren,(SDL_Color){8,10,16,18}); SDL_Rect R={0,0,W,H}; SDL_RenderFillRect(ren,&R); }
+
+        // --- dibujar malla de triángulos (vector field) ---
+        if(drawVectors){
+            float hueBase = fmodf(210.0f + 60.0f*sinf(0.3f*(float)t), 360.0f);
+            for(int gy=0; gy<ny; ++gy){
+                for(int gx=0; gx<nx; ++gx){
+                    Vec2 c = { gx*cell + cell*0.5f, gy*cell + cell*0.5f };
+                    Vec2 v = field_at(c, fixed, count, useMouseDip? &mouse:NULL, fieldKind);
+                    draw_vector_triangle(ren, c, v, /*scaleLen*/cell*0.9f, /*baseW*/cell*0.23f,
+                                         /*vmaxColor*/6000.0f, hueBase);
+                }
+            }
+        }
+
+        // --- partículas advectadas por el campo ---
+        if(drawParticles && P>0){
+            set_col(ren, (SDL_Color){255, 255, 255, 200});
+            for(int i=0;i<P;i++){
+                Vec2 p = parts[i].p;
+                Vec2 v = field_at(p, fixed, count, useMouseDip? &mouse:NULL, fieldKind);
+                Vec2 dir = v_norm(v);
+                float speed = 90.0f + 5000.0f * CLAMP(v_len(v)/8000.0f, 0.0f, 1.0f);
+                p = v_add(p, v_scale(dir, speed * fdt));
+                // wrap toroidal
+                if(p.x<0) p.x+=W; else if(p.x>=W) p.x-=W;
+                if(p.y<0) p.y+=H; else if(p.y>=H) p.y-=H;
+                parts[i].p = p;
+                SDL_RenderDrawPoint(ren, (int)p.x, (int)p.y);
+            }
+        }
+
         SDL_RenderPresent(ren);
     }
 
-    free(nodes);
+    free(parts);
+    free(fixed);
     SDL_DestroyRenderer(ren);
     SDL_DestroyWindow(win);
     SDL_Quit();
