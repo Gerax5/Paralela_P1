@@ -12,26 +12,36 @@
 ### Paralelizable (candidatos fuertes)
 
 - **Cálculo del diagrama de Voronoi:**
+  
   Evaluar para cada píxel qué punto (stipple) le corresponde → altamente paralelizable (SIMD/MIMD).
+
 - **Cálculo de centroides ponderados:**
+
   Sumar coordenadas de píxeles en cada celda, aplicando peso según intensidad de la imagen. Cada celda puede acumularse en paralelo.
+
 - **Reubicación de puntos (Lloyd’s algorithm):**
+
   Puede hacerse en paralelo por cada punto.
+
 - **Escalamiento de radios y anisotropía:**
+
   Cada stipple aplica su propio factor → paralelismo por dato.
 
 ## 2. Estrategias de paralelización
 
 - **Paralelismo de datos (SIMD + MIMD)**:
   Cada píxel del área de la imagen puede evaluarse en paralelo para asignarse a un punto Voronoi.
+  
   → Justificación: el cálculo es independiente por píxel.
 
 - **Reducciones en paralelo:**
   Para calcular centroides se necesitan sumatorias → usar `reduction(+:var)` de OpenMP.
+  
   → Justificación: evita condiciones de carrera y es más eficiente que `critical`.
 
 - **Paralelismo por tareas (OpenMP sections):**
   Diferentes fases (dibujar puntos, dibujar líneas, guardar resultados) pueden dividirse en secciones si se procesan en la misma iteración.
+  
   → Justificación: balancea cómputo heterogéneo.
 
 ## 3. Directivas de OpenMP y estructuras de datos
@@ -77,12 +87,19 @@
 ## 5. Justificación técnica
 
 - **Por qué `parallel for` y no `sections` para el Voronoi:**
+
   El cálculo de distancias y asignación es homogéneo y masivo, ideal para dividir iteraciones.
+
 - **Por qué `reduction` y no `critical`:**
+
   `critical` genera un cuello de botella en acumulaciones. `reduction` escala mucho mejor porque combina resultados al final.
+
 - **Por qué datos contiguos y no listas enlazadas:**
+
   El acceso aleatorio penaliza el rendimiento en paralelo. Arreglos lineales favorecen cache y SIMD.
+
 - **Por qué iniciar con tiling:**
+
   Permite aprovechar coherencia espacial, especialmente en imágenes grandes.
 
 ## Ejemplo práctico de paralelización
