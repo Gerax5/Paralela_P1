@@ -28,7 +28,7 @@ Ejecuta el programa indicando el número de partículas (círculos).
 Por ejemplo, para **200 círculos**:
 
 ```bash
-./main 200
+./secuencial 200
 ```
 
 Para salir de la ventana, presiona **ESC** o cierra la ventana.
