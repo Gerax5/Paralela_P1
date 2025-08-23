@@ -1,7 +1,12 @@
+# SO
+.DS_Store
+Thumbs.db
+
 # Prerequisites
 *.d
 
 # Object files
+build/
 *.o
 *.ko
 *.obj
@@ -61,3 +66,7 @@ dkms.conf
 
 # Ignorar cualquier archivo sin extensión
 *secuencial
+
+# Salidas (opcional: NO versionar)
+images/output/**
+!images/output/.gitkeep
