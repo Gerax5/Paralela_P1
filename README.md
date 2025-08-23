@@ -12,13 +12,13 @@ sudo apt-get install libsdl2-dev
 ## Compilación
 
 ```bash
-gcc -O2 -std=c11 main.c $(sdl2-config --cflags --libs) -lm -o nube3d
+gcc -O2 -std=c11 main.c $(sdl2-config --cflags --libs) -lm -o secuencial
 ```
 
 ## Ejecución
 
 ```bash
-./nube3d [N] [k]
+./secuencial [N] [k]
 ```
 
 * `N` = número de puntos (default: 2000)
@@ -27,8 +27,8 @@ gcc -O2 -std=c11 main.c $(sdl2-config --cflags --libs) -lm -o nube3d
 Ejemplos:
 
 ```bash
-./nube3d
-./nube3d 4000 12
+./secuencial
+./secuencial 4000 12
 ```
 
 ## Controles
