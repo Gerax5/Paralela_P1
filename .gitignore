@@ -35,6 +35,8 @@
 *.i*86
 *.x86_64
 *.hex
+main
+secuencial
 
 # Debug files
 *.dSYM/
@@ -51,6 +53,11 @@ Module.symvers
 Mkfile.old
 dkms.conf
 
-# debug information files
+# Debug information files
 *.dwo
+
+# VSCode settings
 .vscode/
+
+# Ignorar cualquier archivo sin extensión
+*secuencial
