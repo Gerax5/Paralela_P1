@@ -13,20 +13,21 @@
 │   └── ...
 ├── include/
 │   ├── app.h
+│   ├── config.h            # DEFAULT_THREADS, DEFAULT_SCHEDULE, etc.
 │   ├── image.h
 │   ├── lloyd.h
 │   ├── render_sdl.h
 │   ├── stippling.h
 │   └── voronoi.h
 ├── src/
-│   ├── main.c               # parse args, loop principal, FPS
-│   ├── app.c                # orquestación por iteración
-│   ├── image.c              # carga/ muestreo de intensidad
-│   ├── lloyd.c              # Lloyd / centros de masa ponderados
-│   ├── stippling.c          # estado de puntos (N), radios, ruido, init
-│   ├── voronoi.c            # asignación/aprox Voronoi (píxel→punto)
-│   ├── render_sdl.c         # dibujo puntos/overlay FPS con SDL2
-│   └── util.c               # timers, clamps, RNG si se usa
+│   ├── main.c              # parse args (N, T, S, IMG), loop, FPS
+│   ├── app.c               # orquestación por iteración
+│   ├── image.c             # carga PNG/JPG (SDL2_image) y muestreo
+│   ├── lloyd.c             # centros de masa ponderados
+│   ├── stippling.c         # estado de puntos, radios, init
+│   ├── voronoi.c           # asignación píxel→punto (tileado)
+│   ├── render_sdl.c        # dibujo puntos/overlay FPS con SDL2
+│   └── util.c              # timers, clamps, RNG
 ├── images/
 │   ├── input/
 │   │   ├── lena.png
@@ -35,14 +36,14 @@
 │       ├── seq/
 │       └── omp/
 ├── tests/
-│   ├── run_grid.sh          # barrido N × hilos, guarda CSV
-│   ├── compare.sh           # compara métricas seq vs omp
-│   ├── perf.sh              # pruebas repetibles (10+ mediciones)
+│   ├── run_grid.sh         # barrido N×hilos, guarda CSV
+│   ├── compare.sh          # speedup/eficiencia
+│   ├── perf.sh             # 10+ mediciones repetibles
 │   └── data/
 │       └── baseline.csv
 └── build/
-    ├── obj/                 # .o
-    └── bin/                 # ejecutables (seq/omp)
+    ├── obj/                # .o
+    └── bin/                # ejecutables (seq/omp)
 ```
 
 ## 2. Descripción de carpetas/archivos
