@@ -1,3 +1,4 @@
+#include "render_sdl.h"
 #include "app.h"
 #include "config.h"
 #include <SDL2/SDL.h>
@@ -97,14 +98,7 @@ void appRun(App *app)
       app->lastFpsUpdate = app->accTime;
     }
 
-    SDL_SetRenderDrawColor(app->ren, 12, 16, 28, 255);
-    SDL_RenderClear(app->ren);
-
-    int s = 50 + (int)(20.0 * SDL_sinf((float)app->accTime * 2.0f));
-    SDL_Rect r = {app->w / 2 - s, app->h / 2 - s, 2 * s, 2 * s};
-    SDL_SetRenderDrawColor(app->ren, 40, 180, 220, 255);
-    SDL_RenderFillRect(app->ren, &r);
-
+    renderFrame(app->ren, app->w, app->h, app->accTime);
     SDL_RenderPresent(app->ren);
   }
 }
