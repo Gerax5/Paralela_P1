@@ -52,3 +52,23 @@
 #define defaultNPoints 1000
 #define defaultLloydStep 3
 #define defaultGamma 1.0f
+
+/*
+ * STIPPLE_WEIGHT_BY_BRIGHTNESS
+ * ----------------------------
+ * Controla el campo de pesos usado por Lloyd sin teclas adicionales.
+ *
+ *   1 -> pondera por claridad: w = luminancia^gamma
+ *        (los puntos se concentran en zonas claras; aspecto tipo “debug”).
+ *
+ *   0 -> pondera por oscuridad: w = (1 - luminancia)^gamma
+ *        (los puntos se concentran en zonas oscuras).
+ *
+ * Notas:
+ *   - Se puede sobreescribir en compilacion con:
+ *       -DSTIPPLE_WEIGHT_BY_BRIGHTNESS=0  o  =1
+ *   - Mantener en 1 si buscas mejor contraste en logos/fondos oscuros.
+ */
+#ifndef STIPPLE_WEIGHT_BY_BRIGHTNESS
+#define STIPPLE_WEIGHT_BY_BRIGHTNESS 1
+#endif

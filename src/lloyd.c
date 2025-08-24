@@ -4,8 +4,7 @@
 #include "image.h"
 #include "stippling.h"
 #include "voronoi.h"
-
-#define DEBUG_FLIP_WEIGHT 1
+#include "config.h"
 
 /*
  * lloyd.c
@@ -132,21 +131,16 @@ bool lloydStep(const Image *img, Stippling *s, int W, int H, int step, float gam
       float lum = sampleIntensityBilinearUV(img, u, v);
 
       double w;
-#if DEBUG_FLIP_WEIGHT
-      // Diagnóstico: favorece claros
+#if STIPPLE_WEIGHT_BY_BRIGHTNESS
+      // Favorece zonas claras (comportamiento “debug”)
       w = pow(fmax(0.0, lum), (double)gamma);
 #else
-      // Remapeo de contraste y umbral de blancos
-      const float t = 0.08f; // prueba 0.05..0.15
-      const float c = 1.0f / (1.0f - t);
-      float dark = 1.0f - lum; // oscuridad lineal
-      dark = (dark > t) ? (dark - t) * c : 0.0f;
-      // Peso correcto: favorece oscuros
-      w = pow(dark, (double)gamma);
+      // Favorece zonas oscuras (modo antiguo)
+      w = pow(fmax(0.0, 1.0 - lum), (double)gamma);
 #endif
 
       if (w <= 0.0)
-        continue; // píxel claro o sin aporte
+        continue;
 
       // Vecino más cercano usando la grilla (anillo 0..2 suele bastar)
       int best = gridNearest(&g, s, (float)x, (float)y, 2);
@@ -201,7 +195,13 @@ bool lloydStep(const Image *img, Stippling *s, int W, int H, int step, float gam
       float u = ((float)rx + 0.5f) / (float)W;
       float v = ((float)ry + 0.5f) / (float)H;
       float lum = sampleIntensityBilinearUV(img, u, v);
-      double w = pow(fmaxf(0.0f, 1.0f - lum), (double)gamma);
+      double w =
+#if STIPPLE_WEIGHT_BY_BRIGHTNESS
+          pow(fmaxf(0.0f, lum), (double)gamma);
+#else
+          pow(fmaxf(0.0f, 1.0f - lum), (double)gamma);
+#endif
+
       if (w > 1e-6)
       { // umbral pequeño
         s->pts[i].x = (float)rx;

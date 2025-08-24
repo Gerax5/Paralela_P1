@@ -5,95 +5,100 @@
 /*
  * image.h
  * -------
- * Estructuras y funciones utilitarias para trabajar con imagenes en memoria.
+ * Utilidades para trabajar con imagenes en memoria.
  *
  * Convenciones:
- *   - Todas las imagenes se almacenan como SDL_Surface en formato SDL_PIXELFORMAT_RGBA32.
- *   - El puntero `pixels` es un alias directo de `surface->pixels` casteado a Uint32*.
- *   - La intensidad devuelta por las funciones sample* es luminancia Rec.709 normalizada [0..1].
+ *   - Las imagenes se cargan y convierten a SDL_PIXELFORMAT_RGBA32.
+ *   - `pixels` alias de surface->pixels (Uint32*); `pitchPixels = pitch/4`.
+ *   - La intensidad devuelta por sample* es luminancia Rec.709 en [0..1],
+ *     calculada sobre RGB lineal (sRGB -> lineal).
  *
  * Propiedad y ciclo de vida:
- *   - imageLoad inicializa un Image y toma propiedad del SDL_Surface creado.
- *   - imageFree libera el SDL_Surface y deja el Image en estado nulo.
+ *   - imageLoad crea y asigna el SDL_Surface; imageFree lo libera.
  *
  * Seguridad:
- *   - Las funciones de muestreo validan limites y toleran punteros nulos devolviendo 0.0f.
- *   - No hay sincronizacion interna; si accedes desde varios hilos, coordina externamente.
+ *   - Las funciones validan limites y toleran punteros nulos devolviendo 0.0f.
+ *   - Extraccion de canales via SDL_GetRGBA (independiente de endian/format).
+ *   - No hay sincronizacion interna.
  */
 
 typedef struct
 {
-  /* Dimensiones de la imagen en pixeles. */
+  /* Dimensiones en pixeles. */
   int w, h;
 
-  /* Pitch expresado en pixeles (no en bytes). Equivale a surface->pitch / 4 en RGBA32. */
+  /* Pitch en unidades de pixel (surface->pitch / 4 en RGBA32). */
   int pitchPixels;
 
-  /* Buffer de pixeles en formato RGBA8888 (SDL_PIXELFORMAT_RGBA32). */
+  /* Buffer RGBA8888 (SDL_PIXELFORMAT_RGBA32). */
   Uint32 *pixels;
 
-  /* Superficie SDL propietaria del buffer. Se libera en imageFree. */
+  /* Superficie SDL propietaria del buffer. */
   SDL_Surface *surface;
 } Image;
 
-/*
- * Carga una imagen desde disco con SDL2_image y la convierte a RGBA32.
+/**
+ * imageLoad
+ * ---------
+ * Carga una imagen (PNG/JPG) y la convierte a RGBA32.
  *
  * Params:
- *   img   -> salida; debe ser un puntero valido a Image (no inicializado).
- *   path  -> ruta al archivo (PNG/JPG soportados por SDL2_image).
+ *   img  -> salida (no inicializado).
+ *   path -> ruta a archivo.
  *
  * Return:
- *   true  si la carga y conversion fueron exitosas.
- *   false en error (tambien imprime diagnostico por stderr).
+ *   true si cargo/convertio; false y log a stderr en error.
  *
  * Post:
- *   En exito, `img->surface` y `img->pixels` quedan inicializados.
- *   En error, `img` queda en estado nulo.
+ *   En exito, `surface` y `pixels` quedan listos para muestreo.
  */
 bool imageLoad(Image *img, const char *path);
 
-/*
- * Libera los recursos asociados a `img` y lo deja en estado nulo.
- * Es seguro llamar con `img == NULL`.
+/**
+ * imageFree
+ * ---------
+ * Libera el SDL_Surface y deja `img` en estado nulo.
+ * Es segura con `img == NULL`.
  */
 void imageFree(Image *img);
 
-/*
+/**
  * sampleIntensity
  * ---------------
- * Muestreo por vecino mas cercano en coordenadas de pixel.
+ * Muestreo NN en coords de pixel.
  *
  * Params:
  *   img -> imagen fuente.
- *   x,y -> coordenadas enteras en espacio de pixel.
+ *   x,y -> coordenadas enteras (0..w-1, 0..h-1).
  *
  * Return:
- *   Luminancia Rec.709 normalizada en [0..1].
- *   Devuelve 0.0f si (img == NULL) o fuera de rango.
+ *   Luma Rec.709 en [0..1] (sRGB->lineal). 0.0f si invalido.
  */
 float sampleIntensity(const Image *img, int x, int y);
 
-/*
+/**
  * sampleIntensityBilinearUV
  * -------------------------
- * Muestreo bilineal en coordenadas normalizadas.
+ * Muestreo bilineal en coords normalizadas.
  *
  * Params:
  *   img -> imagen fuente.
- *   u,v -> coordenadas en [0,1]; se hace clamp interno al rango valido.
+ *   u,v -> [0,1]; se hace clamp interno.
  *
  * Return:
- *   Luminancia Rec.709 normalizada en [0..1], interpolada bilinealmente.
- *   Devuelve 0.0f si (img == NULL) o si la imagen no esta inicializada.
+ *   Luma Rec.709 en [0..1] (sRGB->lineal). 0.0f si invalido.
  */
 float sampleIntensityBilinearUV(const Image *img, float u, float v);
 
 /**
  * sampleRgbBilinearUV
  * -------------------
- * Muestrea color sRGB por bilineal en u,v in [0,1].
- * Devuelve r,g,b en [0..255].
+ * Muestrea color sRGB por bilineal en (u,v) in [0,1].
+ *
+ * Params:
+ *   img -> imagen fuente.
+ *   u,v -> [0,1]; clamp interno.
+ *   r,g,b -> salida en 0..255 (alfa ignorado).
  */
 void sampleRgbBilinearUV(const Image *img, float u, float v,
                          Uint8 *r, Uint8 *g, Uint8 *b);
