@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "image.h"
+#include "stippling.h"
 
 /*
  * Estructura principal de la aplicación.
@@ -24,6 +25,7 @@ struct App
   // Recursos de imagen
   Image image;           // Imagen cargada con SDL_image
   SDL_Texture *imageTex; // Textura para dibujar la imagen en pantalla
+  Stippling stip;
 };
 
 /*
@@ -118,6 +120,13 @@ bool appInit(App **outApp, int width, int height, const char *title, const char 
     }
   }
 
+  // N por ahora fijo; luego lo haremos CLI
+  const int defaultN = 1000;
+  if (!stipplingInit(&app->stip, defaultN, app->w, app->h, 42u))
+  {
+    fprintf(stderr, "stipplingInit fallo\n");
+  }
+
   *outApp = app;
   return true;
 }
@@ -168,6 +177,8 @@ void appRun(App *app)
       SDL_RenderCopy(app->ren, app->imageTex, NULL, &dst);
     }
 
+    stipplingRender(&app->stip, app->ren, 2);
+
     // Render principal (cuadrado y círculo pulsante)
     renderFrame(app->ren, app->w, app->h, app->accTime);
     SDL_RenderPresent(app->ren);
@@ -181,6 +192,11 @@ void appShutdown(App *app)
 {
   if (!app)
     return;
+
+  // 1) Recursos propios
+  stipplingFree(&app->stip);
+
+  // 2) Gráficos
   if (app->imageTex)
     SDL_DestroyTexture(app->imageTex);
   imageFree(&app->image);
@@ -188,7 +204,10 @@ void appShutdown(App *app)
     SDL_DestroyRenderer(app->ren);
   if (app->win)
     SDL_DestroyWindow(app->win);
+
+  // 3) Subsistemas
   IMG_Quit();
-  free(app);
   SDL_Quit();
+
+  free(app);
 }
