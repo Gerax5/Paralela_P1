@@ -71,3 +71,4 @@ dkms.conf
 images/output/**
 !images/output/.gitkeep
 .markdownlint.json
+tests/data/

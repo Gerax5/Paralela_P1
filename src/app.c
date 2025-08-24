@@ -5,11 +5,13 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <errno.h>
+#include <string.h>
 #include "app.h"
 #include "config.h"
 #include "image.h"
 #include "stippling.h"
 #include "lloyd.h"
+#include "utils.h"
 
 /*
  * Estructura principal de la aplicación.
@@ -49,6 +51,14 @@ struct App
   bool showBg;         // si es true, dibuja la imagen de fondo
   int dotRadius;       // radio visual de los puntos (solo afecta el render)
   bool wantScreenshot; // marcador para guardar captura al final del frame actual
+
+  int maxIters;      // si >0, salir cuando iters >= maxIters (modo batch)
+  char *metricsPath; // si no NULL, log de métricas por iteración (CSV)
+
+  // --- Sweep de gamma (modo batch/testing)
+  bool sweepGamma;
+  float gStart, gEnd, gStep;
+  int gEvery; // incrementar cada N iteraciones
 };
 
 /*
@@ -86,6 +96,32 @@ static void updateFpsTitle(App *app)
 
   // Aplicar el nuevo título a la ventana
   SDL_SetWindowTitle(app->win, title);
+}
+
+static void sweepGammaTick(App *app)
+{
+  if (!app->sweepGamma)
+    return;
+  if (app->gEvery < 1)
+    app->gEvery = 1;
+
+  if (app->iters > 0 && (app->iters % app->gEvery) == 0)
+  {
+    float next = app->gammaW + app->gStep;
+    if (app->gStep > 0.f)
+    {
+      app->gammaW = (next > app->gEnd) ? app->gEnd : next;
+    }
+    else if (app->gStep < 0.f)
+    {
+      app->gammaW = (next < app->gEnd) ? app->gEnd : next;
+    }
+    else
+    {
+      // gStep == 0 -> no cambiar nada
+    }
+    updateFpsTitle(app);
+  }
 }
 
 /*
@@ -209,6 +245,71 @@ bool appInit(App **outApp, int width, int height, const char *title,
   app->w = (width > 0) ? width : defaultWidth;
   app->h = (height > 0) ? height : defaultHeight;
 
+  // Defaults de ejecución/visualización
+  app->autoRun = false;
+  app->iters = 0;
+  app->pixelStride = defaultLloydStep;
+  app->gammaW = defaultGamma;
+  app->seed = 42u;
+
+  app->showBg = true;          // mostrar imagen de fondo
+  app->dotRadius = 2;          // radio de los puntos (solo visual)
+  app->wantScreenshot = false; // sin captura pendiente
+
+  // Modo batch + logging (variables de entorno)
+  app->maxIters = 0;
+  app->metricsPath = NULL;
+
+  const char *env_auto = getenv("STIPPLE_AUTORUN");   // "1" para auto
+  const char *env_maxi = getenv("STIPPLE_MAX_ITERS"); // p.ej. "300"
+  const char *env_csv = getenv("STIPPLE_METRICS");    // ruta CSV
+
+  // Barrido de gamma (opcional)
+  app->sweepGamma = false;
+  app->gStart = app->gEnd = 0.f;
+  app->gStep = 0.f;
+  app->gEvery = 1;
+
+  const char *env_gstart = getenv("STIPPLE_GAMMA_START"); // opcional
+  const char *env_gend = getenv("STIPPLE_GAMMA_END");     // requerido para activar
+  const char *env_gstep = getenv("STIPPLE_GAMMA_STEP");   // requerido para activar
+  const char *env_gevery = getenv("STIPPLE_GAMMA_EVERY"); // opcional, default=1
+
+  if (env_gend && env_gstep)
+  {
+    app->sweepGamma = true;
+    app->gEnd = (float)atof(env_gend);
+    app->gStep = (float)atof(env_gstep);
+    app->gEvery = (env_gevery && atoi(env_gevery) > 0) ? atoi(env_gevery) : 1;
+
+    if (env_gstart)
+    {
+      app->gStart = (float)atof(env_gstart);
+      app->gammaW = app->gStart; // arrancar desde START
+    }
+    else
+    {
+      app->gStart = app->gammaW; // si no hay START, parte del gamma actual
+    }
+
+    // Si además quieres auto-run sin tocar el CLI:
+    if (!app->autoRun)
+      app->autoRun = true;
+  }
+
+  if (env_auto && *env_auto == '1')
+    app->autoRun = true;
+  if (env_maxi)
+  {
+    int v = atoi(env_maxi);
+    if (v > 0)
+      app->maxIters = v;
+  }
+  if (env_csv && *env_csv)
+  {
+    app->metricsPath = strdup(env_csv); // se libera en appShutdown
+  }
+
   // Crear ventana y renderer acelerado con vsync
   app->win = SDL_CreateWindow(title ? title : defaultTitle,
                               SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
@@ -279,17 +380,6 @@ bool appInit(App **outApp, int width, int height, const char *title,
     // return false;
   }
 
-  // Parametros de ejecucion/visualizacion por defecto
-  app->autoRun = false;
-  app->iters = 0;
-  app->pixelStride = defaultLloydStep;
-  app->gammaW = defaultGamma;
-  app->seed = 42u;
-
-  app->showBg = true;          // mostrar imagen de fondo
-  app->dotRadius = 2;          // radio de los puntos (solo visual)
-  app->wantScreenshot = false; // sin captura pendiente
-
   // Ayuda rapida en consola
   printf("[SPACE] paso Lloyd | [A] auto | [-]/[+] step | [G]/[H] gamma | [B] fondo | [Z]/[X] radio | [R] reseed | [P] screenshot\n");
   fflush(stdout);
@@ -345,9 +435,8 @@ void appRun(App *app)
       if (e.type == SDL_KEYDOWN)
       {
         SDL_Keycode sym = e.key.keysym.sym;
-        // SDL_Scancode sc = e.key.keysym.scancode; // reservado por si mapeamos layout
-        // Uint16      mods = e.key.keysym.mod;      // o combinaciones con Shift/Ctrl
-        // printf("KEYDOWN sym=%s (%d)\n", SDL_GetKeyName(sym), sym); // debug opcional
+        // SDL_Scancode sc = e.key.keysym.scancode;
+        // Uint16      mods = e.key.keysym.mod;
 
         // Salir
         if (sym == SDLK_ESCAPE)
@@ -355,13 +444,33 @@ void appRun(App *app)
           running = false;
         }
 
-        // Paso manual de Lloyd
+        // Paso manual de Lloyd (con timing + CSV opcional)
         if (sym == SDLK_SPACE)
         {
-          if (lloydStep(&app->image, &app->stip, app->w, app->h,
-                        app->pixelStride, app->gammaW))
+          uint64_t t0 = util_now_ns();
+          bool ok = lloydStep(&app->image, &app->stip, app->w, app->h,
+                              app->pixelStride, app->gammaW);
+          uint64_t t1 = util_now_ns();
+
+          if (ok)
           {
             app->iters++;
+
+            // Log a CSV si está habilitado
+            if (app->metricsPath)
+            {
+              double ms = util_ns_to_ms(t1 - t0);
+              util_csv_append(app->metricsPath,
+                              "iter,ms,step,gamma,npoints",
+                              "%d,%.3f,%d,%.3f,%d\n",
+                              app->iters, ms, app->pixelStride, app->gammaW, app->stip.count);
+            }
+
+            // Salir si alcanzó tope de iteraciones en modo batch
+            if (app->maxIters > 0 && app->iters >= app->maxIters)
+              running = false;
+
+            sweepGammaTick(app);
           }
         }
 
@@ -369,6 +478,7 @@ void appRun(App *app)
         if (sym == SDLK_a)
         {
           app->autoRun = !app->autoRun;
+          sweepGammaTick(app);
           updateFpsTitle(app); // feedback inmediato en el titulo
         }
 
@@ -428,8 +538,9 @@ void appRun(App *app)
         // Re-seed: reinicia nube de puntos con nueva semilla (misma N)
         if (sym == SDLK_r)
         {
+          int n = app->stip.count; // conservar N actual
           stipplingFree(&app->stip);
-          stipplingInit(&app->stip, defaultNPoints, app->w, app->h, ++app->seed);
+          stipplingInit(&app->stip, n, app->w, app->h, ++app->seed);
           app->iters = 0;
           updateFpsTitle(app);
         }
@@ -443,13 +554,31 @@ void appRun(App *app)
     app->accTime += dt;
     app->frames++;
 
-    // Modo automatico: avanza Lloyd cada frame
+    // Modo automatico: avanza Lloyd cada frame (con timing + CSV opcional)
     if (app->autoRun)
     {
-      if (lloydStep(&app->image, &app->stip, app->w, app->h,
-                    app->pixelStride, app->gammaW))
+      uint64_t t0 = util_now_ns();
+      bool ok = lloydStep(&app->image, &app->stip, app->w, app->h,
+                          app->pixelStride, app->gammaW);
+      uint64_t t1 = util_now_ns();
+
+      if (ok)
       {
         app->iters++;
+
+        if (app->metricsPath)
+        {
+          double ms = util_ns_to_ms(t1 - t0);
+          util_csv_append(app->metricsPath,
+                          "iter,ms,step,gamma,npoints",
+                          "%d,%.3f,%d,%.3f,%d\n",
+                          app->iters, ms, app->pixelStride, app->gammaW, app->stip.count);
+        }
+
+        sweepGammaTick(app);
+
+        if (app->maxIters > 0 && app->iters >= app->maxIters)
+          running = false;
       }
     }
 
@@ -517,6 +646,10 @@ void appShutdown(App *app)
   //    Destruye la textura creada a partir de la imagen cargada.
   if (app->imageTex)
     SDL_DestroyTexture(app->imageTex);
+
+  // 3) Liberar métricas
+  if (app->metricsPath)
+    free(app->metricsPath);
 
   //    Libera la superficie y metadatos de la imagen (pixels, pitch, etc.).
   imageFree(&app->image);
