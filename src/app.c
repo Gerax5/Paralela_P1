@@ -1,12 +1,13 @@
-#include "render_sdl.h"
-#include "app.h"
-#include "config.h"
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_image.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include "render_sdl.h"
+#include "app.h"
+#include "config.h"
 #include "image.h"
 #include "stippling.h"
+#include "lloyd.h"
 
 /*
  * Estructura principal de la aplicación.
@@ -26,6 +27,13 @@ struct App
   Image image;           // Imagen cargada con SDL_image
   SDL_Texture *imageTex; // Textura para dibujar la imagen en pantalla
   Stippling stip;
+
+  // Lloyd runtime
+  bool autoRun;
+  int iters;
+  int pixelStride;
+  float gammaW;
+  unsigned seed;
 };
 
 /*
@@ -34,8 +42,10 @@ struct App
 static void updateFpsTitle(App *app)
 {
   double fps = (app->accTime > 0.0) ? (app->frames / app->accTime) : 0.0;
-  char title[128];
-  snprintf(title, sizeof(title), "%s — FPS: %.1f", defaultTitle, fps);
+  char title[160];
+  snprintf(title, sizeof(title), "%s — FPS: %.1f | it=%d step=%d gamma=%.2f%s",
+           defaultTitle, fps, app->iters, app->pixelStride, app->gammaW,
+           app->autoRun ? " [AUTO]" : "");
   SDL_SetWindowTitle(app->win, title);
 }
 
@@ -51,7 +61,10 @@ bool appInit(App **outApp, int width, int height, const char *title, const char 
     return false;
   }
 
+  SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "2"); // "1" = bilinear, "2" = mejor disponible
+
   App *app = (App *)calloc(1, sizeof(App));
+
   if (!app)
   {
     SDL_Quit();
@@ -91,7 +104,8 @@ bool appInit(App **outApp, int width, int height, const char *title, const char 
    * Inicializa SDL_image para PNG y JPG
    * Si falla, libera recursos y retorna false
    */
-  if ((IMG_Init(IMG_INIT_PNG | IMG_INIT_JPG) & (IMG_INIT_PNG | IMG_INIT_JPG)) == 0)
+  int flags = IMG_INIT_PNG | IMG_INIT_JPG;
+  if ((IMG_Init(flags) & flags) != flags)
   {
     fprintf(stderr, "IMG_Init: %s\n", IMG_GetError());
     SDL_DestroyRenderer(app->ren);
@@ -119,13 +133,17 @@ bool appInit(App **outApp, int width, int height, const char *title, const char 
       fprintf(stderr, "SDL_CreateTextureFromSurface: %s\n", SDL_GetError());
     }
   }
-
-  // N por ahora fijo; luego lo haremos CLI
-  const int defaultN = 1000;
-  if (!stipplingInit(&app->stip, defaultN, app->w, app->h, 42u))
+  // Inicializa el conjunto de puntos
+  if (!stipplingInit(&app->stip, defaultNPoints, app->w, app->h, 42u))
   {
     fprintf(stderr, "stipplingInit fallo\n");
   }
+
+  app->autoRun = false;
+  app->iters = 0;
+  app->pixelStride = defaultLloydStep;
+  app->gammaW = defaultGamma;
+  app->seed = 42u;
 
   *outApp = app;
   return true;
@@ -149,8 +167,76 @@ void appRun(App *app)
     {
       if (e.type == SDL_QUIT)
         running = false;
-      if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_ESCAPE)
-        running = false;
+
+      if (e.type == SDL_KEYDOWN)
+      {
+        SDL_Keycode sym = e.key.keysym.sym;
+        SDL_Scancode sc = e.key.keysym.scancode;
+        Uint16 mods = e.key.keysym.mod;
+
+        // debug
+        // printf("KEYDOWN  sym=%s (%d)  scancode=%d  mods=0x%04x\n",
+        //        SDL_GetKeyName(sym), sym, sc, mods);
+        // fflush(stdout);
+
+        if (sym == SDLK_ESCAPE)
+          running = false;
+
+        // 1) Iteración manual
+        if (sym == SDLK_SPACE)
+        {
+          if (lloydStep(&app->image, &app->stip, app->w, app->h,
+                        app->pixelStride, app->gammaW))
+          {
+            app->iters++;
+          }
+        }
+
+        // 2) Auto ON/OFF
+        if (sym == SDLK_a)
+        {
+          app->autoRun = !app->autoRun;
+          updateFpsTitle(app);
+        }
+
+        // 3) step --  (SOLO '-' y keypad '-')
+        if (sym == SDLK_MINUS || sym == SDLK_KP_MINUS)
+        {
+          if (app->pixelStride > 1)
+            app->pixelStride--;
+          updateFpsTitle(app);
+        }
+
+        // 4) step ++  (SOLO '+' y variantes)
+        if (sym == SDLK_PLUS || sym == SDLK_KP_PLUS ||
+            sym == SDLK_EQUALS /* cubre SHIFT+'=' = '+' en varios teclados */)
+        {
+          if (app->pixelStride < 64)
+            app->pixelStride++;
+          updateFpsTitle(app);
+        }
+
+        // 5) gamma up / down
+        if (sym == SDLK_g)
+        {
+          app->gammaW *= 1.10f;
+          updateFpsTitle(app);
+        }
+        if (sym == SDLK_h)
+        {
+          app->gammaW /= 1.10f;
+          updateFpsTitle(app);
+        }
+
+        // 6) re-seed puntos
+        if (sym == SDLK_r)
+        {
+          stipplingFree(&app->stip);
+          stipplingInit(&app->stip, defaultNPoints, app->w, app->h, ++app->seed);
+          app->iters = 0;
+          updateFpsTitle(app);
+        }
+      }
     }
 
     // Actualización de tiempo
@@ -159,6 +245,15 @@ void appRun(App *app)
     app->last = now;
     app->accTime += dt;
     app->frames++;
+
+    if (app->autoRun)
+    {
+      if (lloydStep(&app->image, &app->stip, app->w, app->h,
+                    app->pixelStride, app->gammaW))
+      {
+        app->iters++;
+      }
+    }
 
     // Actualización periódica del título con FPS
     if (app->accTime - app->lastFpsUpdate >= 0.25)
@@ -180,7 +275,7 @@ void appRun(App *app)
     stipplingRender(&app->stip, app->ren, 2);
 
     // Render principal (cuadrado y círculo pulsante)
-    renderFrame(app->ren, app->w, app->h, app->accTime);
+    // renderFrame(app->ren, app->w, app->h, app->accTime);
     SDL_RenderPresent(app->ren);
   }
 }
