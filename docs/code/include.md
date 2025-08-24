@@ -27,7 +27,7 @@ bool appInit(App **outApp,
              int npoints);
 ```
 
-- Crea ventana/renderer (SDL2), inicializa SDL\_image, carga imagen (`imagePath` o `defaultImagePath`) e inicializa la nube con `npoints` (o `defaultNPoints`).
+- Crea ventana/renderer (SDL2), inicializa SDL_image, carga imagen (`imagePath` o `defaultImagePath`) e inicializa la nube con `npoints` (o `defaultNPoints`).
 
 ```c
 void appRun(App *app);
@@ -39,7 +39,7 @@ void appRun(App *app);
 void appShutdown(App *app);
 ```
 
-- Libera puntos, texturas/superficies, renderer/ventana y cierra SDL/SDL\_image.
+- Libera puntos, texturas/superficies, renderer/ventana y cierra SDL/SDL_image.
 
 **Controles (runtime):**
 

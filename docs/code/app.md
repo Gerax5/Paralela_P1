@@ -2,182 +2,185 @@
 
 ## Resumen
 
-`app.c` orquesta la aplicación gráfica del proyecto *Voronoi Stippling*. Se encarga de:
+`app.c` orquesta la aplicación gráfica *Voronoi Stippling*. Se encarga de:
 
-- Inicializar y cerrar SDL/SDL_image.
+- Inicializar/cerrar SDL y SDL_image.
 - Crear ventana, renderer y recursos de imagen.
 - Mantener el estado de la simulación (puntos, iteraciones, parámetros).
-- Ejecutar el bucle principal por frame:
-
-  1. Entrada de usuario (teclado/ventana).
-  2. Simulación (paso de Lloyd manual o automatico).
-  3. Render (fondo + puntos) y captura opcional.
-- Mostrar FPS y estado en el titulo de la ventana.
+- Bucle por frame:
+  - entrada (teclado/ventana)
+  - simulación (Lloyd manual/auto)
+  - render (fondo + puntos) y captura opcional.
+- Mostrar métricas (FPS, iteraciones, parámetros) en el título.
 
 ## Flujo de alto nivel
 
-```bash
+```text
 appInit(...) -> appRun(app) -> appShutdown(app)
 ```
-
-- `appInit` prepara todo lo necesario (SDL, imagen, puntos).
-- `appRun` procesa eventos, ejecuta Lloyd y dibuja la escena.
-- `appShutdown` libera recursos en orden correcto.
 
 ## Estructura `App`
 
 ```c
 struct App {
   // SDL
-  SDL_Window   *win;     // ventana
-  SDL_Renderer *ren;     // renderer acelerado (con vsync si hay soporte)
+  SDL_Window   *win;
+  SDL_Renderer *ren;
 
   // Canvas
-  int w, h;              // dimensiones actuales de la ventana
+  int w, h;
 
-  // Tiempo y FPS
-  Uint64 freq;           // frecuencia del contador de alto rendimiento
-  Uint64 last;           // ultimo tick medido
-  double accTime;        // tiempo acumulado (s)
-  int frames;            // frames renderizados desde init
-  double lastFpsUpdate;  // ultima vez que se actualizo el titulo (s)
+  // Tiempo/FPS
+  Uint64 freq, last;
+  double accTime, lastFpsUpdate;
+  int    frames;
 
-  // Imagen y stippling
-  Image image;           // surface RGBA8888 + acceso a pixeles
-  SDL_Texture *imageTex; // textura para dibujar la imagen de fondo
-  Stippling stip;        // nube de puntos
+  // Imagen + puntos
+  Image     image;
+  SDL_Texture *imageTex;
+  Stippling stip;
 
-  // Parametros de Lloyd
-  bool  autoRun;         // si es true, ejecuta Lloyd cada frame
-  int   iters;           // iteraciones acumuladas
-  int   pixelStride;     // muestreo espacial (>=1; grande = mas rapido, menos preciso)
-  float gammaW;          // peso (1 - luminancia)^gamma
-  unsigned seed;         // semilla para resembrar puntos (R)
+  // Visual
+  bool  colorPoints;   // colorear cada punto desde la imagen
+  bool  invertTheme;   // alterna fondo claro/oscuro y base de puntos
+  float minRadius;     // radio mínimo por punto (estilizado)
+  float maxRadius;     // radio máximo por punto (estilizado)
 
-  // Opciones visuales
-  bool showBg;           // dibujar fondo si hay imagen cargada
-  int  dotRadius;        // radio visual de los puntos
-  bool wantScreenshot;   // marcar captura para el final del frame actual
+  // Lloyd
+  bool  autoRun;
+  int   iters;
+  int   pixelStride;   // k >= 1
+  float gammaW;        // (1 - luminancia)^gamma
+  unsigned seed;       // para reseed (R)
+
+  // Render/utilidades
+  bool showBg;
+  int  dotRadius;      // radio fijo (si no se usa el estilizado)
+  bool wantScreenshot;
+
+  // Batch/medición
+  int   maxIters;      // 0 -> sin tope
+  char *metricsPath;   // CSV (si no NULL)
+
+  // Sweep de gamma (batch/testing)
+  bool  sweepGamma;
+  float gStart, gEnd, gStep;
+  int   gEvery;        // aplicar cada N iteraciones
 };
 ```
 
-Pautas:
+**Notas:**
 
-- Los recursos de SDL viven entre `appInit` y `appShutdown`.
-- `iters`, `pixelStride`, `gammaW` y `seed` controlan la simulacion.
-- `showBg` y `dotRadius` solo afectan el render.
+- Los recursos viven entre `appInit` y `appShutdown`.
+- `minRadius/maxRadius`, `colorPoints`, `invertTheme` afectan el render “estilizado”.
+- `metricsPath`, `maxIters` y el *sweep* de gamma permiten ejecuciones batch con logging.
 
-## Inicializacion: `appInit`
+## Inicialización — `appInit`
 
-Responsable de:
+Hace:
 
-- `SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER)`.
-- `IMG_Init` con `PNG` y `JPG`.
-- Creacion de `SDL_Window` y `SDL_Renderer` (acelerado + vsync).
-- Carga de imagen (si falla, la app continua sin fondo).
-- Creacion de textura a partir de la superficie cargada.
-- Inicializacion de la nube de puntos (`stipplingInit`).
-- Seteo de parametros por defecto (`autoRun=false`, `pixelStride`, `gammaW`, etc.).
-- Mensaje de ayuda en consola con los atajos.
+- `SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER)` y `IMG_Init(PNG | JPG)`.
+- Crea ventana y renderer acelerado (con VSYNC si hay).
+- Carga imagen (si falla, se puede continuar sin fondo) y crea textura.
+- Inicializa nube de puntos (`stipplingInit`).
+- Define defaults: `autoRun=false`, `pixelStride=defaultLloydStep`, `gammaW=defaultGamma`, `minRadius=0.8`, `maxRadius=3.0`, etc.
+- Imprime ayuda de teclas en consola.
 
-Errores:
+**Variables de entorno soportadas:**
 
-- Cada fallo imprime motivo en `stderr` y limpia lo ya creado antes de devolver `false`.
+- `STIPPLE_AUTORUN=1` -> arranca en auto.
+- `STIPPLE_MAX_ITERS=N` -> tope de iteraciones (batch).
+- `STIPPLE_METRICS=path.csv` -> log por iteración (se crea encabezado si no existe).
+- Sweep de gamma:
 
-## Titulo y FPS: `updateFpsTitle`
+  - `STIPPLE_GAMMA_START=<f>` (opcional),
+  - `STIPPLE_GAMMA_END=<f>` (requiere),
+  - `STIPPLE_GAMMA_STEP=<f>` (requiere),
+  - `STIPPLE_GAMMA_EVERY=<int>` (opcional; default=1).
 
-- Formatea el titulo con:
+## Título y FPS — `updateFpsTitle`
 
-  - `FPS` promedio desde el arranque.
-  - `it`, `step`, `gamma`, `r`.
-  - Indicadores `"[AUTO]"` y `"[BG OFF]"` segun el estado.
-- Llamado cada \~0.25 s desde `appRun` para evitar sobrecarga.
+- Formatea: `FPS`, `it`, `step`, `gamma`, `r` (radio fijo), `minR/maxR`, y flags `[COLOR]` / `[INVERT]`.
+- Se actualiza aprox. cada 0.25 s desde `appRun`.
 
-## Capturas: `saveScreenshot`
+## Capturas — `saveScreenshot`
 
-- Crea `images/output` si no existe.
-- Lee los pixeles del render target a un `SDL_Surface` RGBA32.
-- Guarda `PNG` con nombre `stipple_XXXXX.png` (XXXXX = `iters`).
-- Debe invocarse al final del frame para capturar exactamente lo dibujado.
-- Devuelve `true` en exito, `false` en caso de error (y loguea el motivo).
+- Asegura `images/output/`.
+- Copia el *framebuffer* a un `SDL_Surface` RGBA32 y guarda `PNG`.
+- Nombre: `images/output/stipple_XXXXX.png` (`XXXXX = iters`).
+- Debe llamarse al final del frame para capturar lo que se ve.
 
-## Bucle principal: `appRun`
+## Bucle principal — `appRun`
 
-Estructura por frame:
+**Por frame:**
 
 1. **Entrada**
 
-   - `SDL_PollEvent` procesa `SDL_QUIT` y `SDL_KEYDOWN`.
-   - Atajos de teclado:
+    - `SDL_PollEvent`: `SDL_QUIT` y `SDL_KEYDOWN`.
+    - **Atajos de teclado:**
+      - `ESC`  -> salir.
+      - `SPACE` -> 1 paso de Lloyd (con timing + CSV si activo).
+      - `A` -> auto ON/OFF.
+      - `-` / `+` (incluye keypad y `=`) -> `pixelStride` down/up.
+      - `G` / `H` -> `gammaW` up/down.
+      - `B` -> alterna `showBg`.
+      - `Z` / `X` -> `dotRadius` down/up.
+      - `R` -> reseed con nueva `seed`.
+      - `P` -> marcar captura del frame.
+      - `C` -> alterna `colorPoints` (color real de la imagen).
+      - `I` -> alterna `invertTheme` (tema claro/oscuro).
+      - `N` / `M` -> `minRadius` -/+ (clamp `[0.5, maxRadius]`).
+      - `,` / `.` -> `maxRadius` -/+ (clamp `[minRadius, 20]`).
 
-     - `ESC` -> salir.
-     - `SPACE` -> 1 paso de Lloyd.
-     - `A` -> alterna `autoRun`.
-     - `-` / `+` (incluye keypad y `=`) -> `pixelStride` down/up.
-     - `G` / `H` -> `gammaW` up/down.
-     - `B` -> alterna `showBg`.
-     - `Z` / `X` -> `dotRadius` down/up.
-     - `R` -> resembrar nube con nueva `seed`.
-     - `P` -> marcar captura del frame.
+2. **Simulación:**
 
-2. **Simulacion**
+    - Calcula `dt`, acumula `accTime` y `frames`.
+    - Si `autoRun`, ejecuta `lloydStep` (mide tiempo, loguea si `metricsPath`).
+    - Aplica sweep de gamma si está activo (cada `gEvery` iters).
 
-   - Calcula `dt` con `SDL_GetPerformanceCounter`.
-   - Acumula `accTime` y `frames`.
-   - Si `autoRun == true`, ejecuta `lloydStep` y aumenta `iters`.
-   - Actualiza el titulo cada \~0.25 s.
+3. **Render:**
 
-3. **Render**
+    - Fondo sólido o imagen (según `showBg` e `imageTex`), respetando `invertTheme`.
+    - Dibuja puntos con `stipplingRenderStyled(...)` usando:
 
-   - Limpia el fondo con color solido.
-   - Dibuja la imagen de fondo si `showBg` y hay `imageTex`.
-   - Dibuja los puntos (`stipplingRender`).
-   - Si `wantScreenshot == true`, llama `saveScreenshot` y limpia el flag.
-   - `SDL_RenderPresent`.
+      - `minRadius/maxRadius`, `colorPoints`, `invertTheme`, y brillo local de la imagen.
+    - Si `wantScreenshot`, guarda PNG y limpia el flag.
+    - `SDL_RenderPresent()`.
 
-Notas:
+**Notas:**
 
-- `lloydStep` usa el muestreo bilinear de la imagen y una grilla uniforme para vecino mas cercano (ver `lloyd.c` y `voronoi.c`).
-- `pixelStride` controla la densidad de muestreo por iteracion (3-4 suele ser buen compromiso).
+- `lloydStep` usa muestreo bilineal UV y *UniformGrid* para *nearest neighbor*.
+- `pixelStride` balancea costo/calidad (3–4 suele ir bien).
 
-## Cierre: `appShutdown`
+## Cierre — `appShutdown`
 
-Orden de liberacion:
+Orden:
 
-1. `stipplingFree`.
-2. `SDL_DestroyTexture`, `imageFree`, `SDL_DestroyRenderer`, `SDL_DestroyWindow`.
-3. `IMG_Quit`, `SDL_Quit`.
-4. `free(app)`.
+1. `stipplingFree`
+2. `SDL_DestroyTexture`, `imageFree`, `SDL_DestroyRenderer`, `SDL_DestroyWindow`
+3. `IMG_Quit`, `SDL_Quit`
+4. `free(app)`
 
-Llamar exactamente una vez cuando ya no se necesite renderizar ni acceder a la imagen.
+Idempotente a nivel de punteros internos; no-op si `app == NULL`.
 
-## Interaccion con otros modulos
+## Interacción con otros módulos
 
-- `image.c`: carga la imagen y expone muestreo por luminancia (`sampleIntensity*`).
-- `lloyd.c`: implementa el paso de Lloyd con ponderacion por oscuridad y nearest usando `UniformGrid`.
-- `voronoi.c`: indice espacial (grilla) para acelerar la busqueda del punto mas cercano.
-- `stippling.c`: estado y renderizado de la nube de puntos.
+- `image.c`: carga y muestreo (luminancia/ RGB bilineal).
+- `lloyd.c`: paso de Lloyd con ponderación por oscuridad y reseed de huérfanos.
+- `voronoi.c`: *UniformGrid* para acelerar NN.
+- `stippling.c`: estado y render (incluye versión “estilizada” por brillo/color).
 
-## Parametros importantes en runtime
+## Parámetros clave en runtime
 
-- `pixelStride` (step >= 1): subirlo acelera el barrido de pixeles, pero reduce precision por paso.
-- `gammaW`:
+- `pixelStride` (>=1): más alto -> más rápido/menos preciso por paso.
+- `gammaW`: >1 concentra en zonas oscuras; <1 aplanado.
+- `minRadius/maxRadius`: controlan el rango de radios por punto (estilizado).
+- `colorPoints`: ON -> usa color real; OFF -> monocromo según tema.
+- `invertTheme`: alterna fondo claro/oscuro y base de puntos.
+- `autoRun`: ejecuta Lloyd en cada frame.
 
-  - `> 1.0` -> da mas peso a zonas oscuras (mas puntos ahi).
-  - `< 1.0` -> lo contrario.
-- `autoRun`: si esta activo, se itera Lloyd en cada frame.
-- `dotRadius`: puramente visual; no cambia la simulacion.
-- `showBg`: alterna la imagen de fondo.
+## Registro y errores
 
-## Errores y registro
-
-- Se usa `fprintf(stderr, ...)` para errores de SDL/SDL_image y utilidades del sistema.
-- Mensajes de ayuda y exito (`printf`) para capturas y controles.
-
-## Extensiones sugeridas
-
-- Parseo de argumentos de linea de comandos:
-  - `N` (numero de puntos), `IMG` (ruta), y, pensando en OMP, `T` (threads) y `S` (schedule).
-- Medicion de rendimiento por iteracion y export a CSV.
-- Modo paso a paso con limites de velocidad (p. ej., dormir si FPS > X).
-- Reescalado de ventana con ajuste de puntos (si se desea).
+- Errores a `stderr`.
+- Info/ayuda y confirmaciones a `stdout` (p. ej., captura guardada).
+- CSV (si `metricsPath`) con encabezado auto y filas `iter,ms,step,gamma,npoints`.

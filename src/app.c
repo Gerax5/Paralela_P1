@@ -14,83 +14,93 @@
 #include "utils.h"
 
 /*
- * Estructura principal de la aplicación.
- * Mantiene handlers de SDL, estado de tiempo/FPS y recursos para imagen y stippling.
- * Nota: la vida útil de todos los miembros está acotada a appInit/appShutdown.
+ * App
+ * ---
+ * Estado global de la aplicacion. Vive entre appInit(..) y appShutdown(..).
+ * Propiedad/vida util:
+ *   - `win`, `ren`, `imageTex` y `image.surface` se crean en appInit y se destruyen en appShutdown.
+ *   - `stip` (nube de puntos) se inicializa/libera en appInit/appShutdown o reseed (R).
  */
 struct App
 {
-  // --- Ventana y renderer (creados en appInit, destruidos en appShutdown)
-  SDL_Window *win;   // ventana principal de SDL
-  SDL_Renderer *ren; // renderer acelerado (vsync si está disponible)
+  // --- Ventana y renderer (SDL)
+  SDL_Window *win;   // ventana principal
+  SDL_Renderer *ren; // renderer acelerado (idealmente con vsync)
 
-  // --- Tamaño actual del canvas en píxeles
-  int w; // ancho de la ventana
-  int h; // alto de la ventana
+  // --- Tamano actual del canvas (px)
+  int w; // ancho de ventana
+  int h; // alto  de ventana
 
-  // --- Reloj y métricas de rendimiento
-  Uint64 freq;          // frecuencia del contador de alto rendimiento (SDL_GetPerformanceFrequency)
-  Uint64 last;          // último valor leído del contador (para calcular dt)
-  double accTime;       // tiempo acumulado desde appInit (segundos)
-  int frames;           // total de frames renderizados desde appInit
-  double lastFpsUpdate; // última vez que se actualizó el título con FPS (segundos)
+  // --- Reloj / metricas
+  Uint64 freq;          // SDL_GetPerformanceFrequency()
+  Uint64 last;          // ultima lectura de contador (para dt)
+  double accTime;       // segundos acumulados desde appInit
+  int frames;           // frames renderizados
+  double lastFpsUpdate; // timestamp ultima actualizacion de titulo
 
-  // --- Recursos de imagen
-  Image image;           // imagen cargada (surface RGBA8888 + acceso a píxeles)
-  SDL_Texture *imageTex; // textura creada a partir de image.surface (puede ser NULL si no hay imagen)
-  Stippling stip;        // nube de puntos que se renderiza y actualiza con Lloyd
-  bool colorPoints;      // alterna color por imagen
-  bool invertTheme;      // fondo oscuro+puntos claros <-> fondo claro+puntos negros
-  float minRadius;       // radio minimo por punto
-  float maxRadius;       // radio maximo por punto
+  // --- Recursos de imagen / puntos
+  Image image;           // surface RGBA8888 + acceso a pixeles
+  SDL_Texture *imageTex; // textura creada desde image.surface (puede ser NULL)
+  Stippling stip;        // nube de puntos (modificada por Lloyd)
+  bool colorPoints;      // ON: muestrea color de la imagen por punto
+  bool invertTheme;      // ON: fondo claro + puntos oscuros; OFF: fondo oscuro + puntos claros
+  float minRadius;       // radio minimo por punto (px)  [clamp >= ~0.5]
+  float maxRadius;       // radio maximo por punto (px)  [>= minRadius]
 
-  // --- Parámetros y estado de ejecución de Lloyd
-  bool autoRun;    // si es true, ejecuta un paso de Lloyd en cada frame
-  int iters;       // contador de iteraciones de Lloyd realizadas
-  int pixelStride; // muestreo del canvas en píxeles (>=1; mayor -> más rápido, menos preciso)
-  float gammaW;    // gamma del peso (1 - luminancia)^gamma
-  unsigned seed;   // semilla para re-inicializar la nube de puntos (tecla R)
+  // --- Lloyd (parametros/estado)
+  bool autoRun;    // ON: ejecuta un paso de Lloyd por frame
+  int iters;       // iteraciones de Lloyd acumuladas
+  int pixelStride; // stride de muestreo (>=1)  [mayor = mas rapido/menos preciso]
+  float gammaW;    // exponente del peso; segun config:
+                   //   STIPPLE_WEIGHT_BY_BRIGHTNESS==1 -> w = lum^gammaW
+                   //   STIPPLE_WEIGHT_BY_BRIGHTNESS==0 -> w = (1 - lum)^gammaW
+  unsigned seed;   // semilla para resembrar la nube (tecla R)
 
-  // --- Opciones visuales y utilidades
-  bool showBg;         // si es true, dibuja la imagen de fondo
-  int dotRadius;       // radio visual de los puntos (solo afecta el render)
-  bool wantScreenshot; // marcador para guardar captura al final del frame actual
+  // --- Opciones visuales / utilidades
+  bool showBg;         // ON: dibuja la imagen de fondo
+  int dotRadius;       // radio visual fijo (solo en stipplingRender)
+  bool wantScreenshot; // marca para guardar PNG al final del frame actual
 
-  int maxIters;      // si >0, salir cuando iters >= maxIters (modo batch)
-  char *metricsPath; // si no NULL, log de métricas por iteración (CSV)
+  // --- Modo batch / logging
+  int maxIters;      // si >0, salir cuando iters >= maxIters
+  char *metricsPath; // ruta CSV para log de metricas (propiedad de App; se libera)
 
-  // --- Sweep de gamma (modo batch/testing)
-  bool sweepGamma;
-  float gStart, gEnd, gStep;
-  int gEvery; // incrementar cada N iteraciones
+  // --- Sweep de gamma (testing por entorno)
+  bool sweepGamma;           // ON: barrido de gamma automatico
+  float gStart, gEnd, gStep; // rango e incremento de gamma
+  int gEvery;                // aplicar incremento cada N iteraciones
 };
 
-/*
+/**
  * updateFpsTitle
  * --------------
- * Actualiza el título de la ventana con métricas de ejecución.
+ * Actualiza el titulo de la ventana con metricas de ejecucion.
  * Muestra:
  *   - FPS: promedio desde el arranque (frames / accTime)
- *   - it:  iteraciones de Lloyd realizadas
- *   - step: pixelStride usado para el muestreo
- *   - gamma: gamma del peso (1 - luminancia)^gamma
- *   - r:  radio visual de los puntos
- * Además añade las banderas "[AUTO]" cuando autoRun está activo
- * y "[BG OFF]" cuando el fondo (imagen) está oculto.
+ *   - it:  iteraciones de Lloyd
+ *   - step: pixelStride de muestreo
+ *   - gamma: exponente del peso (segun build)
+ *            STIPPLE_WEIGHT_BY_BRIGHTNESS==1 -> w = lum^gamma
+ *            STIPPLE_WEIGHT_BY_BRIGHTNESS==0 -> w = (1 - lum)^gamma
+ *   - r:  radio visual fijo de puntos
+ *   - minR/maxR: radios por-punto usados en el render “styled”
+ * Flags visuales:
+ *   - [COLOR]  cuando los puntos muestrean color de la imagen
+ *   - [INVERT] cuando el tema esta invertido (fondo claro / puntos oscuros)
  *
  * Notas:
- *   - Este helper no limita su frecuencia de uso; el throttling se hace en appRun.
- *   - snprintf se usa para evitar desbordes del buffer de título.
+ *   - La limitacion de frecuencia (throttling) se realiza en appRun().
+ *   - Se usa snprintf para evitar desbordes.
  */
 static void updateFpsTitle(App *app)
 {
-  // FPS promedio desde el inicio; si accTime es 0, evitar división
+  // FPS promedio desde el inicio (evitar division por cero)
   double fps = (app->accTime > 0.0) ? (app->frames / app->accTime) : 0.0;
 
-  // Buffer temporal para formatear el título
+  // Buffer temporal del titulo
   char title[160];
 
-  // Construir el string con las métricas y banderas visibles
+  // Formateo del titulo con metricas y flags
   snprintf(title, sizeof(title),
            "%s — FPS: %.1f | it=%d step=%d gamma=%.2f | r=%d | minR=%.1f maxR=%.1f%s%s",
            defaultTitle, fps, app->iters, app->pixelStride, app->gammaW,
@@ -98,10 +108,28 @@ static void updateFpsTitle(App *app)
            app->colorPoints ? " [COLOR]" : "",
            app->invertTheme ? " [INVERT]" : "");
 
-  // Aplicar el nuevo título a la ventana
+  // Aplicar a la ventana
   SDL_SetWindowTitle(app->win, title);
 }
 
+/**
+ * sweepGammaTick
+ * ---------------
+ * Actualiza gammaW automaticamente cuando el barrido de gamma esta activo.
+ *
+ * Comportamiento:
+ *   - Si sweepGamma == false -> no hace nada.
+ *   - Asegura gEvery >= 1.
+ *   - Cada gEvery iteraciones (iters % gEvery == 0) propone next = gammaW + gStep.
+ *     * Si gStep > 0.f: avanza hacia gEnd sin pasarse.
+ *     * Si gStep < 0.f: retrocede hacia gEnd sin pasarse.
+ *     * Si gStep == 0.f: no cambia gammaW.
+ *   - Llama updateFpsTitle(app) para reflejar el nuevo gamma en el titulo.
+ *
+ * Notas:
+ *   - Los limites gStart/gEnd/gStep se configuran en appInit (p. ej. por vars de entorno).
+ *   - Este helper debe llamarse tras incrementar app->iters.
+ */
 static void sweepGammaTick(App *app)
 {
   if (!app->sweepGamma)
@@ -131,21 +159,28 @@ static void sweepGammaTick(App *app)
 /*
  * saveScreenshot
  * --------------
- * Captura el contenido del renderer actual y lo guarda como PNG.
+ * Captura el contenido visual actual del renderer y lo guarda como PNG.
  *
- * Uso y flujo:
- *   1) Asegura que exista el directorio "images/output" (lo crea si falta).
- *   2) Crea un SDL_Surface RGBA32 del tamaño de la ventana.
- *   3) Copia los píxeles del render target con SDL_RenderReadPixels.
- *   4) Genera un nombre de archivo basado en el contador de iteraciones.
- *   5) Escribe un PNG con IMG_SavePNG.
+ * Flujo:
+ *   1) Asegura el directorio "images/output" (lo crea si falta).
+ *   2) Crea un SDL_Surface RGBA32 del tamano de la ventana.
+ *   3) Copia los pixeles del render target con SDL_RenderReadPixels.
+ *   4) Compone el nombre: images/output/stipple_%05d.png (iters actual).
+ *   5) Escribe el PNG via IMG_SavePNG.
+ *
+ * Parametros:
+ *   app -> contexto con ventana/renderer y contador de iteraciones.
+ *
+ * Return:
+ *   true  si se guardo el PNG correctamente.
+ *   false si fallo la creacion del surface, la lectura del backbuffer
+ *         o la escritura del archivo.
  *
  * Notas:
- *   - Debe llamarse al final del frame, despues de dibujar todo y antes
- *     (o justo en el mismo tick) de SDL_RenderPresent, para capturar el frame actual.
- *   - IMG_SavePNG retorna 0 en exito. Cualquier valor distinto indica error.
- *   - RenderReadPixels puede ser costoso segun el driver, pero es correcto
- *     para capturas puntuales.
+ *   - Llamar al FINAL del frame (tras dibujar y antes/justo en el tick de
+ *     SDL_RenderPresent) para capturar lo que se ve.
+ *   - IMG_SavePNG devuelve 0 en exito.
+ *   - SDL_RenderReadPixels puede ser costoso; usar para capturas puntuales.
  */
 static bool saveScreenshot(App *app)
 {
@@ -160,7 +195,7 @@ static bool saveScreenshot(App *app)
     }
   }
 
-  // Crear un surface RGBA32 donde volcar los pixeles del renderer
+  // Surface RGBA32 destino de la copia del backbuffer
   SDL_Surface *surf = SDL_CreateRGBSurfaceWithFormat(
       0, app->w, app->h, 32, SDL_PIXELFORMAT_RGBA32);
   if (!surf)
@@ -169,7 +204,7 @@ static bool saveScreenshot(App *app)
     return false;
   }
 
-  // Leer los pixeles del render target actual al surface
+  // Copiar pixeles del render target actual
   if (SDL_RenderReadPixels(app->ren, NULL, SDL_PIXELFORMAT_RGBA32,
                            surf->pixels, surf->pitch) != 0)
   {
@@ -178,11 +213,11 @@ static bool saveScreenshot(App *app)
     return false;
   }
 
-  // Construir el path de salida usando el contador de iteraciones
+  // Nombre segun iteracion
   char path[256];
   snprintf(path, sizeof(path), "images/output/stipple_%05d.png", app->iters);
 
-  // Guardar PNG (0 = OK segun SDL_image)
+  // Guardar PNG (0 = OK)
   if (IMG_SavePNG(surf, path) != 0)
   {
     fprintf(stderr, "IMG_SavePNG(%s): %s\n", path, IMG_GetError());
@@ -190,39 +225,50 @@ static bool saveScreenshot(App *app)
     return false;
   }
 
-  // Log de exito y liberacion de recursos
   printf("Saved %s\n", path);
   SDL_FreeSurface(surf);
   return true;
 }
 
-/*
+/**
  * appInit
  * -------
- * Inicializa todos los subsistemas necesarios para ejecutar la demo:
- *   - SDL (video + timer)
- *   - SDL_image (PNG y JPG)
- *   - Ventana y renderer acelerado
- *   - Carga de imagen base y creación de textura
- *   - Estado de stippling (nube de puntos)
- *   - Variables de tiempo/FPS y ajustes visuales
+ * Inicializa la aplicacion y sus subsistemas (SDL, SDL_image), crea ventana/
+ * renderer, carga la imagen (opcional), inicializa la nube de puntos y deja
+ * listo el estado para `appRun`.
  *
- * Parámetros:
- *   outApp    -> salida. Recibe la instancia inicializada (propiedad del caller; liberar con appShutdown).
- *   width     -> ancho deseado de ventana. Si es <= 0 se usa defaultWidth.
- *   height    -> alto deseado de ventana.  Si es <= 0 se usa defaultHeight.
- *   title     -> titulo de la ventana. Si es NULL se usa defaultTitle.
- *   imagePath -> ruta de la imagen a cargar. Si es NULL se usa defaultImagePath.
- *   npoints   -> cantidad de puntos iniciales. Si es <= 0 se usa defaultNPoints.
+ * Params:
+ *   outApp    -> salida; recibe puntero valido a App en exito (no NULL).
+ *   width     -> ancho de ventana; si <= 0 usa defaultWidth.
+ *   height    -> alto  de ventana; si <= 0 usa defaultHeight.
+ *   title     -> titulo de la ventana; si NULL usa defaultTitle.
+ *   imagePath -> ruta de imagen; si NULL usa defaultImagePath.
+ *   npoints   -> cantidad inicial de puntos; si <= 0 usa defaultNPoints.
  *
- * Retorna:
- *   true  si todo se inicializa correctamente.
- *   false en caso de error. En ese caso, no se deja memoria/recursos colgados.
+ * Return:
+ *   true  en exito; false si falla alguna etapa (no quedan recursos colgados).
+ *
+ * Efectos/recursos:
+ *   - SDL_Init(SDL_INIT_VIDEO|SDL_INIT_TIMER)
+ *   - IMG_Init(PNG|JPG)
+ *   - Crea SDL_Window/SDL_Renderer (vsync si disponible)
+ *   - Carga y convierte imagen a RGBA32 (SDL_Surface) y crea SDL_Texture
+ *   - Inicializa Stippling (nube de puntos)
+ *   - Inicializa temporizador/FPS y ajustes visuales
+ *
+ * Variables de entorno (opcional):
+ *   STIPPLE_AUTORUN=1           -> autoRun ON
+ *   STIPPLE_MAX_ITERS=<N>       -> modo batch: salir al llegar a N iteraciones
+ *   STIPPLE_METRICS=<ruta.csv>  -> log de métricas por iteración
+ *   STIPPLE_GAMMA_START=<g0>    -> barrido: gamma inicial
+ *   STIPPLE_GAMMA_END=<g1>      -> barrido: gamma objetivo (activa sweep)
+ *   STIPPLE_GAMMA_STEP=<dg>     -> barrido: incremento por gEvery iteraciones
+ *   STIPPLE_GAMMA_EVERY=<k>     -> barrido: aplicar cada k iteraciones (default=1)
  *
  * Notas:
- *   - SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY,"2") pide el mejor filtrado al escalar la textura.
- *   - En cada error se imprime un mensaje a stderr y se limpian recursos antes de regresar false.
- *   - El mensaje de ayuda de teclas se imprime una sola vez al finalizar la init.
+ *   - SDL_HINT_RENDER_SCALE_QUALITY="2" solicita el mejor filtrado disponible.
+ *   - En cada error se imprime a stderr y se limpia todo antes de retornar false.
+ *   - Imprime en stdout el resumen de teclas disponibles al finalizar la init.
  */
 bool appInit(App **outApp, int width, int height, const char *title,
              const char *imagePath, int npoints)
@@ -257,7 +303,7 @@ bool appInit(App **outApp, int width, int height, const char *title,
   app->seed = 42u;
 
   app->colorPoints = false; // arranque en monocromo
-  app->invertTheme = false; // fondo oscuro por defecto (ya lo usas)
+  app->invertTheme = false; // fondo oscuro por defecto
   app->minRadius = 0.8f;    // ajustable en runtime
   app->maxRadius = 3.0f;
 
@@ -301,7 +347,7 @@ bool appInit(App **outApp, int width, int height, const char *title,
       app->gStart = app->gammaW; // si no hay START, parte del gamma actual
     }
 
-    // Si además quieres auto-run sin tocar el CLI:
+    // Auto-run por conveniencia si no estaba activado
     if (!app->autoRun)
       app->autoRun = true;
   }
@@ -377,16 +423,7 @@ bool appInit(App **outApp, int width, int height, const char *title,
   if (!stipplingInit(&app->stip, n0, app->w, app->h, 42u))
   {
     fprintf(stderr, "stipplingInit fallo\n");
-    // No abortamos: la app podria seguir mostrando fondo, pero lo normal es salir.
-    // Si prefieres abortar estrictamente, descomenta el bloque de abajo.
-    // SDL_DestroyTexture(app->imageTex);
-    // imageFree(&app->image);
-    // SDL_DestroyRenderer(app->ren);
-    // SDL_DestroyWindow(app->win);
-    // IMG_Quit();
-    // SDL_Quit();
-    // free(app);
-    // return false;
+    // Permitimos continuar para ver solo el fondo si hay imagen
   }
 
   // Ayuda rapida en consola
@@ -400,29 +437,38 @@ bool appInit(App **outApp, int width, int height, const char *title,
   return true;
 }
 
-/*
+/**
  * appRun
- * -------
- * Bucle principal de la aplicacion. Ciclo por frame con tres etapas:
- *   1) Entrada: procesa eventos de ventana y teclado.
- *   2) Simulacion: aplica paso de Lloyd (manual o automatico) y actualiza metricas.
- *   3) Render: dibuja fondo opcional e imprime la nube de puntos en pantalla.
+ * ------
+ * Bucle principal: procesa eventos, avanza la simulacion (Lloyd) y renderiza.
  *
- * Atajos de teclado (keydown):
- *   ESC        -> salir
- *   SPACE      -> una iteracion de Lloyd
- *   A          -> alterna ejecucion automatica (autoRun)
- *   - / +      -> pixelStride (mayor = mas rapido, menor precision)
- *   G / H      -> gamma (peso de zonas oscuras)
- *   B          -> alterna fondo (imagen)
- *   Z / X      -> radio visual de los puntos (solo afecta el dibujo)
- *   R          -> resembrar la nube de puntos (mismo N, nueva semilla)
- *   P          -> programar captura PNG del frame actual (se dispara al final del draw)
+ * Fases por frame:
+ *   1) Entrada: eventos de ventana/teclado.
+ *   2) Simulacion: paso de Lloyd manual (SPACE) o automatico (autoRun).
+ *      - Mide tiempo por iteracion y, si corresponde, escribe CSV de metricas.
+ *      - Aplica sweep de gamma segun configuracion.
+ *   3) Render: fondo (imagen u oscuro/claro) + nube de puntos estilizada.
+ *      - Captura PNG al final del frame si fue solicitada.
+ *
+ * Controles:
+ *   ESC       -> salir
+ *   SPACE     -> una iteracion de Lloyd
+ *   A         -> auto ON/OFF
+ *   - / +     -> pixelStride -/+
+ *   G / H     -> gamma up/down
+ *   B         -> mostrar/ocultar fondo
+ *   Z / X     -> radio visual de puntos -/+
+ *   R         -> resembrar puntos (misma N, nueva semilla)
+ *   P         -> screenshot PNG (deferida al final del frame)
+ *   C         -> color de puntos ON/OFF (muestreo desde la imagen)
+ *   I         -> invertir tema (fondo claro/oscuro y base de puntos)
+ *   N / M     -> minRadius -/+
+ *   , / .     -> maxRadius -/+
  *
  * Detalles:
- *   - El titulo de la ventana se refresca cada ~0.25 s para evitar sobrecarga.
- *   - La captura se hace despues del render para incluir exactamente lo que se ve.
- *   - pixelStride controla la granularidad del muestreo; gamma > 1 enfatiza zonas oscuras.
+ *   - El titulo de la ventana se actualiza ~cada 0.25 s con FPS/estado.
+ *   - `pixelStride` controla granularidad de muestreo; gamma > 1 enfatiza sombras.
+ *   - Requiere `app != NULL`. Ejecutar en el hilo principal (SDL).
  */
 void appRun(App *app)
 {
@@ -685,24 +731,32 @@ void appRun(App *app)
   }
 }
 
-/*
+/**
  * appShutdown
  * -----------
- * Libera todos los recursos creados por la aplicacion y cierra los
- * subsistemas de SDL/SDL_image. Debe llamarse exactamente una vez
- * al final del programa, cuando ya no se vaya a renderizar ni a
- * usar recursos de imagen.
+ * Libera todos los recursos creados por la aplicación y cierra SDL/SDL_image.
  *
- * Orden recomendado de liberacion:
- *   1) Recursos propios (memoria del estado de puntos).
- *   2) Recursos graficos dependientes del renderer/ventana
- *      (texturas, superficies de imagen, renderer, ventana).
- *   3) Subsistemas globales (SDL_image y SDL).
+ * Propósito:
+ *   Deja el proceso en un estado limpio después de usar `App`. Es segura ante
+ *   inicializaciones parciales (p. ej., si `appInit` falló a mitad) y ante
+ *   punteros NULL internos.
  *
- * Notas:
- *   - Todas las llamadas son seguras si los punteros son NULL.
- *   - La funcion no invalida punteros externos; solo libera y
- *     destruye lo que vive dentro de 'app' y luego libera 'app'.
+ * Orden de liberación:
+ *   1) Recursos propios de la app (nube de puntos).
+ *   2) Recursos gráficos dependientes (textura, imagen/surface, renderer, ventana).
+ *   3) Subsistemas globales (IMG_Quit, SDL_Quit).
+ *
+ * Reglas/garantías:
+ *   - No-op si `app == NULL`.
+ *   - Idempotente a nivel de punteros internos (chequea NULL antes de destruir).
+ *   - Puede llamarse tras un `appInit` fallido sin filtrar.
+ *   - Tras retornar, cualquier puntero dentro de `App` es inválido.
+ *
+ * Parámetros:
+ *   app -> instancia a destruir (propiedad transferida; se libera internamente).
+ *
+ * Retorno:
+ *   (void) Sin valor. Efectos colaterales: cierre de subsistemas y liberación de memoria.
  */
 void appShutdown(App *app)
 {
@@ -710,34 +764,28 @@ void appShutdown(App *app)
     return;
 
   // 1) Recursos propios
-  //    Memoria de la nube de puntos (arreglo de Dot).
-  stipplingFree(&app->stip);
+  stipplingFree(&app->stip); // nube de puntos
 
-  // 2) Graficos
-  //    Destruye la textura creada a partir de la imagen cargada.
+  // 2) Gráficos
   if (app->imageTex)
     SDL_DestroyTexture(app->imageTex);
 
-  // 3) Liberar métricas
+  // Métricas (si se usó logging a CSV)
   if (app->metricsPath)
     free(app->metricsPath);
 
-  //    Libera la superficie y metadatos de la imagen (pixels, pitch, etc.).
-  imageFree(&app->image);
+  imageFree(&app->image); // surface + metadatos
 
-  //    Destruye el renderer antes que la ventana para respetar dependencias.
   if (app->ren)
     SDL_DestroyRenderer(app->ren);
 
-  //    Destruye la ventana SDL.
   if (app->win)
     SDL_DestroyWindow(app->win);
 
-  // 3) Subsistemas
-  //    Cierra SDL_image y SDL. Debe ocurrir al final.
+  // 3) Subsistemas globales
   IMG_Quit();
   SDL_Quit();
 
-  // Libera la estructura principal de la aplicacion.
+  // Estructura principal
   free(app);
 }
