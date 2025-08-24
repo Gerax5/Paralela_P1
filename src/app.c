@@ -209,39 +209,69 @@ bool appInit(App **outApp, int width, int height, const char *title, const char 
 }
 
 /*
- * Loop principal de la aplicación.
- * Maneja eventos, actualiza FPS, dibuja la imagen y el render principal.
+ * appRun
+ * -------
+ * Bucle principal de la aplicación. Hace tres cosas en este orden:
+ *   1) Procesa eventos (teclado/ventana).
+ *   2) Avanza la simulación (paso de Lloyd manual o automático) y actualiza métricas.
+ *   3) Dibuja: fondo opcional + nube de puntos, y presenta el frame.
+ *
+ * Atajos de teclado (keydown):
+ *   ESC       → salir
+ *   SPACE     → 1 iteración de Lloyd
+ *   A         → alterna ejecución automática (autoRun)
+ *   - / +     → pixelStride (muestreo espacial: grande = más rápido/menos preciso)
+ *   G / H     → gamma (peso de zonas oscuras)
+ *   B         → alterna fondo (imagen)
+ *   Z / X     → radio visual de los puntos (solo dibujo)
+ *   R         → resembrar la nube de puntos (mismo N, nueva semilla)
+ *   P         → programar captura del frame actual como PNG (se dispara al final del draw)
+ *
+ * Detalles de implementación:
+ *   • El título de la ventana se refresca cada ~250 ms para no “spamear” SetWindowTitle.
+ *   • Guardamos la captura (saveScreenshot) *después* de renderizar el frame,
+ *     para que incluya exactamente lo que se ve en pantalla.
+ *   • ‘pixelStride’ controla la granularidad del muestreo en Lloyd: subirlo acelera,
+ *     pero la convergencia es más “tosca”. En automático conviene empezar con 3–4.
+ *   • ‘gammaW’ > 1 realza zonas oscuras (más puntos), < 1 las atenúa.
  */
 void appRun(App *app)
 {
   if (!app)
     return;
+
   bool running = true;
 
   while (running)
   {
-    // Manejo de eventos
+    // -----------------------------
+    // 1) ENTRADA / EVENTOS (teclado, ventana)
+    // -----------------------------
     SDL_Event e;
     while (SDL_PollEvent(&e))
     {
       if (e.type == SDL_QUIT)
+      {
         running = false;
+        continue;
+      }
 
       if (e.type == SDL_KEYDOWN)
       {
         SDL_Keycode sym = e.key.keysym.sym;
-        SDL_Scancode sc = e.key.keysym.scancode;
-        Uint16 mods = e.key.keysym.mod;
+        // SDL_Scancode sc = e.key.keysym.scancode; // reservado por si mapeamos layout
+        // Uint16      mods = e.key.keysym.mod;      // ...o combinaciones con Shift/Ctrl
 
-        // debug
-        // printf("KEYDOWN  sym=%s (%d)  scancode=%d  mods=0x%04x\n",
-        //        SDL_GetKeyName(sym), sym, sc, mods);
-        // fflush(stdout);
+        // // DEBUG: útil para descubrir teclas en layouts distintos
+        // printf("KEYDOWN  sym=%s (%d)\n", SDL_GetKeyName(sym), sym);
 
+        // Salir
         if (sym == SDLK_ESCAPE)
+        {
           running = false;
+        }
 
-        // 1) Iteración manual
+        // 1) Paso manual de Lloyd
         if (sym == SDLK_SPACE)
         {
           if (lloydStep(&app->image, &app->stip, app->w, app->h,
@@ -255,27 +285,24 @@ void appRun(App *app)
         if (sym == SDLK_a)
         {
           app->autoRun = !app->autoRun;
-          updateFpsTitle(app);
+          updateFpsTitle(app); // feedback inmediato en el título
         }
 
-        // 3) step --  (SOLO '-' y keypad '-')
+        // 3) Granularidad de muestreo: step-- / step++
         if (sym == SDLK_MINUS || sym == SDLK_KP_MINUS)
         {
           if (app->pixelStride > 1)
             app->pixelStride--;
           updateFpsTitle(app);
         }
-
-        // 4) step ++  (SOLO '+' y variantes)
-        if (sym == SDLK_PLUS || sym == SDLK_KP_PLUS ||
-            sym == SDLK_EQUALS /* cubre SHIFT+'=' = '+' en varios teclados */)
+        if (sym == SDLK_PLUS || sym == SDLK_KP_PLUS || sym == SDLK_EQUALS)
         {
           if (app->pixelStride < 64)
             app->pixelStride++;
           updateFpsTitle(app);
         }
 
-        // 5) gamma up / down
+        // 4) Gamma (peso de oscuridad)
         if (sym == SDLK_g)
         {
           app->gammaW *= 1.10f;
@@ -287,13 +314,14 @@ void appRun(App *app)
           updateFpsTitle(app);
         }
 
-        // Toggle fondo
+        // 5) Fondo ON/OFF (imagen de referencia)
         if (sym == SDLK_b)
         {
           app->showBg = !app->showBg;
           updateFpsTitle(app);
         }
-        // Radio de puntos: Z (-) / X (+)
+
+        // 6) Radio visual de puntos (no afecta la simulación, solo el render)
         if (sym == SDLK_z)
         {
           if (app->dotRadius > 1)
@@ -307,13 +335,13 @@ void appRun(App *app)
           updateFpsTitle(app);
         }
 
-        // Marcar captura para el final del frame actual
+        // 7) Captura: marcar para el final del frame actual
         if (sym == SDLK_p)
         {
           app->wantScreenshot = true;
         }
 
-        // 6) re-seed puntos
+        // 8) Re-seed: reinicia nube de puntos con nueva semilla (misma N)
         if (sym == SDLK_r)
         {
           stipplingFree(&app->stip);
@@ -324,13 +352,16 @@ void appRun(App *app)
       }
     }
 
-    // Actualización de tiempo
+    // -----------------------------
+    // 2) SIMULACIÓN / TIEMPO
+    // -----------------------------
     Uint64 now = SDL_GetPerformanceCounter();
-    double dt = (double)(now - app->last) / (double)app->freq;
+    double dt = (double)(now - app->last) / (double)app->freq; // segundos reales
     app->last = now;
     app->accTime += dt;
     app->frames++;
 
+    // Si está en automático, avanza Lloyd cada frame.
     if (app->autoRun)
     {
       if (lloydStep(&app->image, &app->stip, app->w, app->h,
@@ -340,30 +371,36 @@ void appRun(App *app)
       }
     }
 
-    // Actualización periódica del título con FPS
+    // Refresca el título cada ~250 ms (suficiente para feedback sin sobrecarga)
     if (app->accTime - app->lastFpsUpdate >= 0.25)
     {
       updateFpsTitle(app);
       app->lastFpsUpdate = app->accTime;
     }
 
-    SDL_SetRenderDrawColor(app->ren, 12, 16, 28, 255);
+    // -----------------------------
+    // 3) RENDER
+    // -----------------------------
+    SDL_SetRenderDrawColor(app->ren, 12, 16, 28, 255); // fondo sólido cuando no hay imagen
     SDL_RenderClear(app->ren);
 
-    // Dibujar la imagen si existe (y si showBg == true)
+    // Fondo (imagen), si está habilitado
     if (app->showBg && app->imageTex)
     {
       SDL_Rect dst = {0, 0, app->w, app->h};
       SDL_RenderCopy(app->ren, app->imageTex, NULL, &dst);
     }
 
+    // Nube de puntos (estippling)
     stipplingRender(&app->stip, app->ren, app->dotRadius);
 
+    // Captura al final del frame para incluir todo lo dibujado
     if (app->wantScreenshot)
     {
-      saveScreenshot(app); // lee los píxeles ya renderizados
+      (void)saveScreenshot(app); // si falla, ya loguea el motivo
       app->wantScreenshot = false;
     }
+
     SDL_RenderPresent(app->ren);
   }
 }

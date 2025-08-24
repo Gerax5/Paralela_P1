@@ -1,6 +1,7 @@
 #include "image.h"
 #include <SDL2/SDL_image.h>
 #include <stdio.h>
+#include <math.h>
 
 bool imageLoad(Image *img, const char *path)
 {

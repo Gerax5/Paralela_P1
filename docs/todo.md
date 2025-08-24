@@ -202,35 +202,37 @@ clean:
 
 ## 6. Checklist final
 
-- [ ] Estructura de repo creada.
-- [ ] Docs colocados en `docs/`.
-- [ ] Dependencias instaladas:
+- [x] **Estructura de repo creada.**
 
-  - [ ] `build-essential`
-  - [ ] `libsdl2-dev`
-  - [ ] `libsdl2-image-dev`
-- [ ] Baseline secuencial:
+- [ ] **Docs colocados en `docs/`.**
 
-  - [ ] Args (`N`, `IMG`, `T`, `S`).
-  - [ ] Imagen cargada con `SDL2_image`.
-  - [ ] Iteración Lloyd implementada.
-  - [ ] FPS en pantalla.
-- [ ] Versión OpenMP:
+- [x] **Dependencias instaladas:**
+
+  - [x] `build-essential`
+  - [x] `libsdl2-dev`
+  - [x] `libsdl2-image-dev`
+
+- [ ] **Baseline secuencial:**
+
+  - [ ] Args (`N`, `IMG`, `T`, `S`). *(solo `IMG` por argv\[1])*
+  - [x] Imagen cargada con `SDL2_image`.
+  - [x] Iteración Lloyd implementada.
+  - [x] FPS en pantalla.
+
+- [ ] **Versión OpenMP:**
 
   - [ ] Paralelización asignación/centroides.
   - [ ] Reducciones o buffers privados.
   - [ ] Schedules probados (`dynamic`, `guided`).
-- [ ] Pruebas:
 
-  - [ ] Scripts de performance.
-  - [ ] CSV con ≥10 mediciones.
-  - [ ] Capturas seq vs omp.
-- [ ] Documentación:
+- [ ] **Pruebas:**
 
-  - [ ] README actualizado.
+  - [ ] Scripts de performance. *(\*archivos existen pero sin código)*
+  - [ ] CSV con ≥10 mediciones. *(\*no generado)*
+  - [ ] Capturas seq vs omp. *(\*solo tienes secuencial)*
+
+- [ ] **Documentación:**
+
+  - [ ] README actualizado. *(\*falta detallar compilación/controles/CLI)*
   - [ ] Diagrama de flujo + catálogo funciones.
   - [ ] Bitácora de pruebas.
-- [ ] Limpieza:
-
-  - [ ] `.gitignore` para `build/` y binarios.
-  - [ ] Historial de commits progresivo.
