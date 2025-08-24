@@ -105,7 +105,7 @@ static bool saveScreenshot(App *app)
  * Inicializa SDL, SDL_image, la ventana, renderer y carga la imagen por defecto.
  * Retorna true si todo se inicializa correctamente.
  */
-bool appInit(App **outApp, int width, int height, const char *title, const char *imagePath)
+bool appInit(App **outApp, int width, int height, const char *title, const char *imagePath, int npoints)
 {
   if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER) != 0)
   {
@@ -186,7 +186,8 @@ bool appInit(App **outApp, int width, int height, const char *title, const char 
     }
   }
   // Inicializa el conjunto de puntos
-  if (!stipplingInit(&app->stip, defaultNPoints, app->w, app->h, 42u))
+  int n0 = (npoints > 0) ? npoints : defaultNPoints;
+  if (!stipplingInit(&app->stip, n0, app->w, app->h, 42u))
   {
     fprintf(stderr, "stipplingInit fallo\n");
   }
