@@ -95,7 +95,7 @@ Así la densidad de puntos representa la luminosidad de la imagen.
 ## Resumen matemático clave
 
 | Caso                   | Distancia modificada                  | Actualización de puntos     |
-| --------------  -------- | ------------------------------------- | --------------------------- |
+| ---------------------- | ------------------------------------- | --------------------------- |
 | Lloyd clásico          | Euclidiana estándar                   | Centroide                   |
 | Weighted stippling     | Euclidiana + ponderación de imagen    | Centro de masa              |
 | Multiplicative weights | Euclidiana escalada por $s = 1 / r_i$ | Incluido en cálculo Voronoi |
