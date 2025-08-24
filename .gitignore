@@ -67,6 +67,7 @@ dkms.conf
 # Ignorar cualquier archivo sin extensión
 *secuencial
 
-# Salidas (opcional: NO versionar)
+# Salidas
 images/output/**
 !images/output/.gitkeep
+.markdownlint.json
