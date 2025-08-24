@@ -3,106 +3,64 @@
 #include "stippling.h"
 #include "image.h"
 
-/*
+/**
  * frand01
- * --------
- * Genera un float pseudoaleatorio en [0, 1] a partir de un estado LCG.
+ * -------
+ * Genera un float pseudoaleatorio en [0, 1] usando un LCG de 32 bits.
  *
- * Descripcion:
- *   Avanza un generador congruencial lineal (LCG) de 32 bits y devuelve
- *   un valor normalizado usando los 24 bits altos del estado.
+ * Descripción:
+ *   Avanza el generador congruencial lineal y devuelve un valor normalizado
+ *   empleando los 24 bits altos del estado para reducir correlaciones.
  *
- * Parametros:
- *   st -> puntero al estado interno del RNG. Se actualiza in-place.
+ * Parámetros:
+ *   st -> puntero al estado interno del RNG; se actualiza in-place.
  *
  * Retorna:
- *   Valor pseudoaleatorio en el rango [0, 1]. El valor 1.0 es posible
- *   (aunque poco frecuente). Si necesitas estrictamente [0, 1), cambia
- *   el divisor a 16777216.0f (2^24) o resta un epsilon minimo.
+ *   Valor pseudoaleatorio en [0, 1]. El 1.0 es posible (raro). Si necesitas
+ *   estrictamente [0, 1), usa 16777216.0f (2^24) como divisor o resta un ε.
  *
  * Notas:
- *   - Este LCG es rapido y determinista (misma semilla -> misma secuencia).
- *   - No es criptograficamente seguro ni de alta calidad estadistica,
- *     pero es suficiente para distribuir puntos de forma reproducible.
- *   - La formula usada es el classico LCG de "Numerical Recipes":
- *       state = state * 1664525 + 1013904223
- *   - Se toman los 24 bits altos (state >> 8) para reducir correlaciones.
+ *   - Determinista (misma semilla -> misma secuencia); no cripto-seguro.
+ *   - Fórmula LCG (Numerical Recipes): state = state * 1664525 + 1013904223.
  */
 static float frand01(unsigned *st)
 {
   // Avanza el LCG
   *st = (*st * 1664525u + 1013904223u);
 
-  // Normaliza a [0, 1] usando 24 bits de precision
+  // Normaliza a [0, 1] usando 24 bits de precisión
   return ((*st >> 8) & 0xFFFFFFu) / (float)0xFFFFFFu;
 }
 
-/*
- * drawFilledCircle
- * ----------------
- * Dibuja un circulo relleno centrado en (cx, cy) con radio 'radius'
- * usando segmentos horizontales (scanlines).
- *
- * Descripcion:
- *   Recorre dy en [-radius, radius] y, para cada fila, calcula el
- *   semiancho dx = sqrt(radius^2 - dy^2). Luego traza una linea
- *   horizontal desde (cx - dx, y) hasta (cx + dx, y).
- *
- * Parametros:
- *   r      -> SDL_Renderer valido. El color de dibujo debe estar seteado por el caller.
- *   cx, cy -> centro del circulo en coordenadas de pantalla.
- *   radius -> radio en pixeles. Si es < 0, no se dibuja nada.
- *
- * Notas:
- *   - Complejidad O(radius): se emite una linea por fila del circulo.
- *   - No hace clipping manual; SDL_RenderDrawLine se encarga de recortar.
- *   - El color no se modifica aqui. Setear con SDL_SetRenderDrawColor antes de llamar.
- */
-static void drawFilledCircle(SDL_Renderer *r, int cx, int cy, int radius)
-{
-  // Recorre cada fila vertical dentro del disco
-  for (int dy = -radius; dy <= radius; ++dy)
-  {
-    int y = cy + dy; // coordenada y actual
-
-    // Para esta fila, el semiancho horizontal del disco es:
-    // dx = sqrt(radius^2 - dy^2). Convertimos a int por truncamiento.
-    int dx = (int)sqrtf((float)(radius * radius - dy * dy));
-
-    // Dibuja el segmento horizontal que rellena la fila del circulo
-    SDL_RenderDrawLine(r, cx - dx, y, cx + dx, y);
-  }
-}
-
-/*
+/**
  * stipplingInit
  * -------------
  * Inicializa la estructura Stippling con 'n' puntos distribuidos
- * pseudoaleatoriamente dentro del rectangulo [0, w) x [0, h).
+ * pseudoaleatoriamente dentro del rectángulo [0, w) x [0, h).
  *
- * Parametros:
- *   s     -> salida. Estructura a inicializar.
+ * Parámetros:
+ *   s     -> salida; estructura a inicializar (no debe ser NULL).
  *   n     -> cantidad de puntos; debe ser > 0.
- *   w, h  -> dimensiones del canvas en pixeles; ambos deben ser > 0.
- *   seed  -> semilla para el RNG. Si es 0 se usa un valor por defecto.
+ *   w, h  -> dimensiones del canvas en píxeles; ambos > 0.
+ *   seed  -> semilla para el RNG. Si es 0 se usa una por defecto.
  *
  * Retorna:
  *   true  si la memoria se reserva y los puntos se generan correctamente.
- *   false si hay parametros invalidos o falla la reserva de memoria.
+ *   false si hay parámetros inválidos o falla la reserva de memoria.
  *
- * Efectos:
- *   - Reserva s->pts con 'n' entradas (caller debe liberar con stipplingFree).
- *   - Inicializa s->count, s->width y s->height.
+ * Efectos/contrato:
+ *   - Reserva s->pts con 'n' entradas (liberar luego con stipplingFree).
+ *   - Inicializa s->count, s->width y s->height sólo tras un malloc exitoso.
  *   - Escribe coordenadas en rango [0, w) y [0, h) usando un LCG determinista.
  *
  * Notas:
- *   - La distribucion es uniforme independiente por eje (no Poisson-disc).
- *   - Si malloc falla, no se modifican los campos de 's' mas alla del intento.
+ *   - La distribución es uniforme e independiente por eje (no Poisson-disc).
+ *   - Si malloc falla, no se modifican los campos de 's' (permanece como llegó).
  *   - Complejidad O(n).
  */
 bool stipplingInit(Stippling *s, int n, int w, int h, unsigned seed)
 {
-  // Validacion basica de parametros
+  // Validación básica de parámetros
   if (!s || n <= 0 || w <= 0 || h <= 0)
     return false;
 
@@ -129,15 +87,15 @@ bool stipplingInit(Stippling *s, int n, int w, int h, unsigned seed)
   return true;
 }
 
-/*
+/**
  * stipplingFree
  * -------------
  * Libera el arreglo de puntos y deja la estructura en estado neutro.
  *
- * Parametros:
+ * Parámetros:
  *   s -> puntero a la estructura Stippling a limpiar (puede ser NULL).
  *
- * Comportamiento:
+ * Comportamiento/contrato:
  *   - Si 's' es NULL no hace nada.
  *   - Libera 's->pts' si fue reservado por stipplingInit.
  *   - Pone 's->pts' en NULL y resetea count/width/height a 0.
@@ -159,48 +117,38 @@ void stipplingFree(Stippling *s)
   s->height = 0;
 }
 
-/*
- * stipplingRender
- * ---------------
- * Dibuja la nube de puntos en el renderer usando discos llenos de radio fijo.
+/**
+ * stipplingRenderStyled
+ * ---------------------
+ * Dibuja la nube de puntos con radio por-punto en función del brillo de la imagen,
+ * y opcionalmente colorea cada punto con el color muestreado de la propia imagen.
  *
- * Parametros:
- *   s      -> estado del stippling (lista de puntos en espacio de ventana).
- *   ren    -> SDL_Renderer valido donde se dibuja.
- *   radius -> radio visual (en pixeles). Si es < 1 se fuerza a 1.
+ * Parámetros:
+ *   s          -> conjunto de puntos a dibujar (no NULL, s->pts != NULL).
+ *   ren        -> SDL_Renderer de destino (válido, hilo principal).
+ *   canvasW/H  -> dimensiones del canvas donde viven los puntos (en píxeles).
+ *   img        -> imagen de referencia; si es válida se usa para brillo/color.
+ *   minR       -> radio mínimo (clamp interno a [0.5, maxR]).
+ *   maxR       -> radio máximo (si maxR < minR se clampa a minR).
+ *   useColor   -> si true, el color del punto se toma de la imagen (sRGB bilineal).
+ *   invertTheme-> si true, el color base (cuando no hay color de imagen) es negro; si false, blanco.
  *
  * Comportamiento:
- *   - Si 's' es NULL o 's->pts' es NULL, no hace nada.
- *   - Ajusta el color de dibujo a casi blanco (250,250,250,255).
- *   - Redondea cada posicion (x,y) a entero y traza un circulo lleno
- *     con un algoritmo por scanlines (drawFilledCircle).
+ *   - Para cada punto (x,y), se computan coordenadas UV del canvas a la imagen:
+ *       u = (x + 0.5)/canvasW, v = (y + 0.5)/canvasH  (clamp implícito en muestreo).
+ *   - Se obtiene luminancia (0..1) con sampleIntensityBilinearUV (Rec.709 en lineal).
+ *   - Radio por punto: r = lerp(minR, maxR, 1 - lum)  (claro -> pequeño, oscuro -> grande).
+ *   - Color:
+ *       * useColor == false: usa color base del tema (blanco/negro según invert).
+ *       * useColor == true : usa color sRGB bilineal de la imagen y alfa 230.
+ *   - El disco se rellena con scanlines horizontales (SDL_RenderDrawLine).
  *
  * Notas:
- *   - No limpia ni presenta el frame; eso lo hace el bucle principal.
- *   - Complejidad aproximada O(N * r), donde r es el radio, porque
- *     cada circulo se dibuja con ~2*r+1 lineas horizontales.
- *   - Si necesitas otro color/estilo, cambia el SDL_SetRenderDrawColor
- *     antes de llamar a esta funcion o expone el color como parametro.
+ *   - Si img es NULL/ inválida, lum=0 -> r ≈ maxR para todos los puntos (tema aún aplica).
+ *   - Complejidad ~ O(Σ_i r_i) ≈ O(N * r_prom), ya que se dibujan ~2*r+1 líneas por punto.
+ *   - Cambia el color de dibujo del renderer varias veces; no modifica blending mode.
+ *   - Llamar desde el hilo principal (SDL no es thread-safe para render).
  */
-void stipplingRender(const Stippling *s, SDL_Renderer *ren, int radius)
-{
-  if (!s || !s->pts)
-    return;
-
-  SDL_SetRenderDrawColor(ren, 250, 250, 250, 255); // color de los puntos
-  int r = (radius < 1) ? 1 : radius;               // asegurar radio minimo
-
-  for (int i = 0; i < s->count; i++)
-  {
-    // Redondeo a pixel entero para evitar aliasing raro de subpixel
-    int x = (int)lroundf(s->pts[i].x);
-    int y = (int)lroundf(s->pts[i].y);
-
-    // Dibuja un disco lleno centrado en (x,y) con radio r
-    drawFilledCircle(ren, x, y, r);
-  }
-}
-
 void stipplingRenderStyled(const Stippling *s, SDL_Renderer *ren, int canvasW, int canvasH,
                            const Image *img, float minR, float maxR,
                            bool useColor, bool invertTheme)
@@ -208,11 +156,12 @@ void stipplingRenderStyled(const Stippling *s, SDL_Renderer *ren, int canvasW, i
   if (!s || !s->pts)
     return;
 
-  // Fondo/tema: solo afecta color por defecto del punto
+  // Color base según tema (solo se usa cuando no se toma color de imagen)
   Uint8 baseR = invertTheme ? 0 : 250;
   Uint8 baseG = invertTheme ? 0 : 250;
   Uint8 baseB = invertTheme ? 0 : 250;
 
+  // Clamp suave de radios
   float minRcl = (minR < 0.5f) ? 0.5f : minR;
   float maxRcl = (maxR < minRcl) ? minRcl : maxR;
 
@@ -221,34 +170,33 @@ void stipplingRenderStyled(const Stippling *s, SDL_Renderer *ren, int canvasW, i
     float x = s->pts[i].x;
     float y = s->pts[i].y;
 
-    // UV en canvas -> imagen
+    // Canvas -> UV (normalizado) para muestrear imagen
     float u = (canvasW > 1) ? (x + 0.5f) / (float)canvasW : 0.0f;
     float v = (canvasH > 1) ? (y + 0.5f) / (float)canvasH : 0.0f;
 
-    // Brillo y color de la imagen en la posicion del punto
+    // Brillo y color en la posición del punto
     float lum = 0.0f;
     Uint8 r = baseR, g = baseG, b = baseB;
 
     if (img && img->pixels)
     {
-      lum = sampleIntensityBilinearUV(img, u, v); // [0..1]
+      lum = sampleIntensityBilinearUV(img, u, v); // [0..1] en lineal
       if (useColor)
         sampleRgbBilinearUV(img, u, v, &r, &g, &b);
     }
 
-    // Radio: pequeño en zonas claras, grande en oscuras
-    float inv = 1.0f - lum; // 0 claro, 1 oscuro
-    float radius = minRcl + inv * (maxRcl - minRcl);
-    int ir = (radius < 1.0f) ? 1 : (int)radius;
+    // Radio por punto: claro->pequeño, oscuro->grande
+    float inv = 1.0f - lum;                          // 0 claro, 1 oscuro
+    float radius = minRcl + inv * (maxRcl - minRcl); // lerp(minR,maxR,inv)
+    int ir = (radius < 1.0f) ? 1 : (int)radius;      // entero para raster
 
-    // Color del punto (tema invertido solo afecta base cuando no usamos color)
+    // Set de color (alfa más bajo si usamos color de imagen para suavizar)
     if (!useColor)
       SDL_SetRenderDrawColor(ren, r, g, b, 255);
     else
       SDL_SetRenderDrawColor(ren, r, g, b, 230);
 
-    // Disco lleno (reutiliza tu helper actual)
-    // Nota: usamos el mismo algoritmo por scanlines del módulo.
+    // Relleno del disco por scanlines
     for (int dy = -ir; dy <= ir; ++dy)
     {
       int yy = (int)lroundf(y) + dy;

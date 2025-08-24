@@ -139,7 +139,6 @@ typedef struct {
 ```c
 bool stipplingInit(Stippling *s, int n, int w, int h, unsigned seed);
 void stipplingFree(Stippling *s);
-void stipplingRender(const Stippling *s, SDL_Renderer *ren, int radius);
 
 /* Render “estilizado”: radio por brillo y color opcional de la imagen */
 void stipplingRenderStyled(const Stippling *s, SDL_Renderer *ren, int canvasW, int canvasH,

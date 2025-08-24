@@ -84,33 +84,6 @@ static inline int irand_range(unsigned *st, int hi)
   return (int)(lcg(st) % (unsigned)hi);
 }
 
-/*
- * clampi
- * ------
- * Acota un entero `v` al intervalo cerrado [lo, hi].
- *
- * Parámetros:
- *   v  -> valor de entrada.
- *   lo -> límite inferior.
- *   hi -> límite superior (debe cumplir hi >= lo).
- *
- * Retorno:
- *   - `lo` si v < lo
- *   - `hi` si v > hi
- *   - `v` en caso contrario
- *
- * Uso típico:
- *   - Asegurar índices válidos al mapear a celdas de la grilla o al acceder
- *     buffers de imagen.
- *
- * Complejidad:
- *   O(1).
- */
-static inline int clampi(int v, int lo, int hi)
-{
-  return v < lo ? lo : (v > hi ? hi : v);
-}
-
 /***
  * lloydStep
  * ----------

@@ -55,20 +55,6 @@ bool stipplingInit(Stippling *s, int n, int w, int h, unsigned seed);
 void stipplingFree(Stippling *s);
 
 /**
- * stipplingRender
- * ---------------
- * Dibuja cada punto como disco lleno de radio fijo.
- *
- * Params:
- *   s      -> nube a dibujar.
- *   ren    -> renderer SDL destino.
- *   radius -> radio en px (si <1 se usa 1).
- *
- * Efectos: cambia el color de dibujo y emite lineas 2D.
- */
-void stipplingRender(const Stippling *s, SDL_Renderer *ren, int radius);
-
-/**
  * stipplingRenderStyled
  * ---------------------
  * Dibuja con radio por-punto segun brillo y color opcional de la imagen.

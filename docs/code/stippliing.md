@@ -2,7 +2,7 @@
 
 ## Propósito
 
-Mantener y dibujar la nube de puntos del efecto de *stippling*. Este módulo no conoce nada de Lloyd ni de la imagen fuente; solo administra memoria de los puntos y los dibuja en pantalla.
+Mantener la nube de puntos del efecto *stippling* y dibujarla con un tamaño por-punto derivado del **brillo** de una imagen de referencia. El módulo administra memoria de puntos e implementa un render estilado (con radio variable y color opcional).
 
 ## Estructuras
 
@@ -19,10 +19,10 @@ typedef struct {
 } Stippling;
 ```
 
-Invariantes:
+**Invariantes:**
 
 - `pts` es un arreglo de `count` elementos o `NULL` si el estado está vacío.
-- Las coordenadas se expresan en espacio de ventana `[0..width) x [0..height)`.
+- Las coordenadas están en espacio de ventana `[0..width) x [0..height)`.
 
 ## API pública
 
@@ -30,96 +30,103 @@ Invariantes:
 
 Inicializa el estado con `n` puntos distribuidos aleatoriamente en `[0..w) x [0..h)`.
 
-Parámetros:
+**Parámetros:**
 
-- `s` -> estado a inicializar (no nulo).
-- `n` -> número de puntos, debe ser `> 0`.
-- `w, h` -> dimensiones lógicas del canvas, ambos `> 0`.
-- `seed` -> semilla para el generador (si `seed == 0` se usa un valor por defecto).
+- `s` → estado a inicializar (no nulo).
+- `n` → número de puntos (`> 0`).
+- `w, h` → dimensiones del canvas (`> 0`).
+- `seed` → semilla LCG (si `0`, se usa una por defecto).
 
-Retorno:
+**Retorno:**
 
 - `true` si se asignó memoria y se generó la nube.
-- `false` si hubo parámetros inválidos o fallo de `malloc`.
+- `false` si hay parámetros inválidos o falla `malloc`.
 
-Notas:
+**Notas:**
 
 - Complejidad O(n).
-- Si falla, deja `s` en estado no inicializado.
-
----
+- En fallo, `s` queda sin inicializar (no se escriben campos).
 
 ### `void stipplingFree(Stippling *s);`
 
 Libera la memoria del arreglo de puntos y resetea el estado.
 
-Parámetros:
+**Parámetros:**
 
-- `s` -> estado a limpiar. Puede ser `NULL`.
+- `s` → estado a limpiar. Puede ser `NULL`.
 
-Notas:
+**Notas:**
 
-- Idempotente: se puede llamar múltiples veces sin provocar error.
-- No libera la propia estructura `Stippling`, solo su contenido.
+- Idempotente: segura frente a múltiples llamadas.
+- No libera la estructura `Stippling` en sí, solo su contenido.
 
----
+### `void stipplingRenderStyled(const Stippling *s, SDL_Renderer *ren, int canvasW, int canvasH, const Image *img, float minR, float maxR, bool useColor, bool invertTheme);`
 
-### `void stipplingRender(const Stippling *s, SDL_Renderer *ren, int radius);`
+Dibuja la nube con **radio por-punto** mapeado desde la **luminancia** de la imagen, y opcionalmente colorea cada punto con el **color bilineal** de la imagen.
 
-Dibuja todos los puntos como discos sólidos en el `SDL_Renderer`.
+**Parámetros:**
 
-Parámetros:
+- `s` → puntos a dibujar (`s` y `s->pts` válidos).
+- `ren` → `SDL_Renderer` (hilo principal).
+- `canvasW, canvasH` → dimensiones del canvas donde viven los puntos.
+- `img` → imagen de referencia; si es válida se usa para brillo y (si se pide) color.
+- `minR` → radio mínimo. Se clampa internamente a `≥ 0.5`.
+- `maxR` → radio máximo. Si `< minR`, se ajusta a `minR`.
+- `useColor` → `true`: el color del punto se toma de la imagen; `false`: color base.
+- `invertTheme` → `true`: color base negro; `false`: blanco (solo cuando `useColor == false`).
 
-- `s` -> estado con los puntos a dibujar.
-- `ren` -> renderer válido.
-- `radius` -> radio visual en píxeles. Si `< 1`, se fuerza a `1`.
+**Comportamiento:**
 
-Comportamiento:
+- Para cada punto `(x,y)`:
 
-- Color fijo `RGBA(250,250,250,255)` en esta implementación.
-- Para cada punto, redondea `(x,y)` y traza un círculo lleno por scanlines.
+  - UV del canvas a la imagen: `u=(x+0.5)/canvasW`, `v=(y+0.5)/canvasH`.
+  - Luminancia bilineal **en lineal** (Rec.709) con `sampleIntensityBilinearUV`.
+  - Radio: `r = lerp(minR, maxR, 1 - lum)` → claro ⇒ pequeño; oscuro ⇒ grande.
+  - Color:
 
-Complejidad:
+    - `useColor == false` → usa color base (tema).
+    - `useColor == true` → `sampleRgbBilinearUV` y alfa 230 para una leve suavización.
+  - El disco se rellena por **scanlines** (`SDL_RenderDrawLine`).
 
-- Aproximadamente O(N \* r), r es el radio.
+**Consideraciones:**
 
-Notas:
-
-- No hace `SDL_RenderPresent` ni limpia el fondo.
-- Si se requiere otro color/estilo, ajustar antes el `SDL_SetRenderDrawColor` o exponer color como parámetro.
+- Si `img` es `NULL` o inválida, `lum = 0` ⇒ todos los radios \~`maxR` (tema base aplica).
+- Complejidad de dibujo ≈ `O(Σ_i r_i)` (unas `2*r + 1` líneas por punto).
+- Cambia el color del renderer varias veces; no modifica blending mode.
+- No llama a `SDL_RenderPresent` ni limpia el fondo.
 
 ## Helpers internos (privados)
 
 ### `static float frand01(unsigned *st);`
 
-Generador LCG simple. Devuelve un flotante en `[0,1)` y actualiza la semilla en sitio. Se usa para inicializar posiciones.
-
-### `static void drawFilledCircle(SDL_Renderer *r, int cx, int cy, int radius);`
-
-Dibuja un círculo sólido centrado en `(cx, cy)` mediante líneas horizontales. Evita el coste de llamar píxel a píxel. Complejidad O(r).
-
-## Sistema de coordenadas y dibujo
-
-- Origen en la esquina superior izquierda.
-- Eje X hacia la derecha, eje Y hacia abajo.
-- Las posiciones de `Dot` son flotantes; el render redondea a entero.
+Generador LCG simple. Devuelve un flotante en `[0,1]` y actualiza la semilla in-place. Se usa para inicializar posiciones.
 
 ## Integración
 
-- `stipplingInit` se invoca durante `appInit`.
-- `stipplingRender` se usa en el bucle principal, después del fondo y antes de `SDL_RenderPresent`.
+- `stipplingInit` se invoca en `appInit`.
+- `stipplingRenderStyled` se usa en el bucle principal (`appRun`) después de dibujar el fondo.
 - `stipplingFree` se llama en `appShutdown`.
-
-## Consideraciones de rendimiento
-
-- Con radios grandes o N alto, `drawFilledCircle` puede dominar el tiempo. Posibles mejoras:
-
-  - Cambiar a texturas de punto (sprite) y dibujar con `SDL_RenderCopy` para batches.
-  - Reducir el radio durante la fase de convergencia y aumentarlo al final.
-  - Agrupar por tiles y recortar cuando el disco queda fuera de pantalla.
 
 ## Seguridad y errores
 
-- Las funciones validan punteros básicos; si `s == NULL` o `s->pts == NULL`, el render sale temprano.
+- Validación básica de punteros: si `s == NULL` o `s->pts == NULL`, el render sale temprano.
 - `stipplingInit` retorna `false` si `malloc` falla.
-- No hay sincronización; este módulo no es thread-safe por sí mismo. Dibujar siempre desde el hilo del renderer.
+- No hay sincronización; no es thread-safe. Dibujar siempre desde el **hilo del renderer**.
+
+## Ejemplo de uso
+
+```c
+// Init
+Stippling s;
+if (!stipplingInit(&s, 2000, winW, winH, 42u)) { /* manejar error */ }
+
+// Draw dentro del frame:
+stipplingRenderStyled(&s, ren, winW, winH,
+                      &img,         // imagen de referencia
+                      0.8f, 3.0f,   // minR, maxR
+                      true,         // useColor
+                      false);       // invertTheme
+
+// Shutdown
+stipplingFree(&s);
+```
