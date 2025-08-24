@@ -39,6 +39,10 @@ struct App
   Image image;           // imagen cargada (surface RGBA8888 + acceso a píxeles)
   SDL_Texture *imageTex; // textura creada a partir de image.surface (puede ser NULL si no hay imagen)
   Stippling stip;        // nube de puntos que se renderiza y actualiza con Lloyd
+  bool colorPoints;      // alterna color por imagen
+  bool invertTheme;      // fondo oscuro+puntos claros <-> fondo claro+puntos negros
+  float minRadius;       // radio minimo por punto
+  float maxRadius;       // radio maximo por punto
 
   // --- Parámetros y estado de ejecución de Lloyd
   bool autoRun;    // si es true, ejecuta un paso de Lloyd en cada frame
@@ -88,11 +92,11 @@ static void updateFpsTitle(App *app)
 
   // Construir el string con las métricas y banderas visibles
   snprintf(title, sizeof(title),
-           "%s — FPS: %.1f | it=%d step=%d gamma=%.2f | r=%d%s%s",
+           "%s — FPS: %.1f | it=%d step=%d gamma=%.2f | r=%d | minR=%.1f maxR=%.1f%s%s",
            defaultTitle, fps, app->iters, app->pixelStride, app->gammaW,
-           app->dotRadius,
-           app->autoRun ? " [AUTO]" : "",
-           app->showBg ? "" : " [BG OFF]");
+           app->dotRadius, app->minRadius, app->maxRadius,
+           app->colorPoints ? " [COLOR]" : "",
+           app->invertTheme ? " [INVERT]" : "");
 
   // Aplicar el nuevo título a la ventana
   SDL_SetWindowTitle(app->win, title);
@@ -252,6 +256,11 @@ bool appInit(App **outApp, int width, int height, const char *title,
   app->gammaW = defaultGamma;
   app->seed = 42u;
 
+  app->colorPoints = false; // arranque en monocromo
+  app->invertTheme = false; // fondo oscuro por defecto (ya lo usas)
+  app->minRadius = 0.8f;    // ajustable en runtime
+  app->maxRadius = 3.0f;
+
   app->showBg = true;          // mostrar imagen de fondo
   app->dotRadius = 2;          // radio de los puntos (solo visual)
   app->wantScreenshot = false; // sin captura pendiente
@@ -381,7 +390,9 @@ bool appInit(App **outApp, int width, int height, const char *title,
   }
 
   // Ayuda rapida en consola
-  printf("[SPACE] paso Lloyd | [A] auto | [-]/[+] step | [G]/[H] gamma | [B] fondo | [Z]/[X] radio | [R] reseed | [P] screenshot\n");
+  printf("[SPACE] paso Lloyd | [A] auto | [-]/[+] step | [G]/[H] gamma | [B] fondo | "
+         "[Z]/[X] radio | [R] reseed | [P] screenshot | "
+         "[C] color ON/OFF | [I] tema | [N]/[M] minR -/+ | [,]/[.] maxR -/+\n");
   fflush(stdout);
 
   // Entregar la instancia al caller
@@ -544,6 +555,54 @@ void appRun(App *app)
           app->iters = 0;
           updateFpsTitle(app);
         }
+
+        // Color ON/OFF (C)
+        if (sym == SDLK_c)
+        {
+          app->colorPoints = !app->colorPoints;
+          updateFpsTitle(app);
+        }
+
+        // Invertir tema (I)
+        if (sym == SDLK_i)
+        {
+          app->invertTheme = !app->invertTheme;
+          updateFpsTitle(app);
+        }
+
+        // Min radius (N/M)
+        if (sym == SDLK_n)
+        {
+          app->minRadius -= 0.1f;
+          if (app->minRadius < 0.5f)
+            app->minRadius = 0.5f;
+          if (app->minRadius > app->maxRadius)
+            app->minRadius = app->maxRadius;
+          updateFpsTitle(app);
+        }
+        if (sym == SDLK_m)
+        {
+          app->minRadius += 0.1f;
+          if (app->minRadius > app->maxRadius)
+            app->minRadius = app->maxRadius;
+          updateFpsTitle(app);
+        }
+
+        // Max radius (, .)
+        if (sym == SDLK_COMMA)
+        { // ','
+          app->maxRadius -= 0.1f;
+          if (app->maxRadius < app->minRadius)
+            app->maxRadius = app->minRadius;
+          updateFpsTitle(app);
+        }
+        if (sym == SDLK_PERIOD)
+        { // '.'
+          app->maxRadius += 0.1f;
+          if (app->maxRadius > 20.f)
+            app->maxRadius = 20.f;
+          updateFpsTitle(app);
+        }
       }
     }
 
@@ -599,9 +658,21 @@ void appRun(App *app)
       SDL_Rect dst = {0, 0, app->w, app->h};
       SDL_RenderCopy(app->ren, app->imageTex, NULL, &dst);
     }
+    else
+    {
+      // fondo sólido según tema
+      if (app->invertTheme)
+        SDL_SetRenderDrawColor(app->ren, 245, 245, 245, 255);
+      else
+        SDL_SetRenderDrawColor(app->ren, 12, 16, 28, 255);
+      SDL_RenderClear(app->ren);
+    }
 
     // Nube de puntos (stippling)
-    stipplingRender(&app->stip, app->ren, app->dotRadius);
+    stipplingRenderStyled(&app->stip, app->ren, app->w, app->h,
+                          &app->image,
+                          app->minRadius, app->maxRadius,
+                          app->colorPoints, app->invertTheme);
 
     // Captura al final del frame para incluir todo lo dibujado
     if (app->wantScreenshot)

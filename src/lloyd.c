@@ -5,6 +5,8 @@
 #include "stippling.h"
 #include "voronoi.h"
 
+#define DEBUG_FLIP_WEIGHT 1
+
 /*
  * lloyd.c
  * --------
@@ -19,7 +21,8 @@
  *   - Se acumulan sumas ponderadas por punto y luego se actualizan los centroides.
  */
 
-static inline unsigned lcg(unsigned *st)
+static inline unsigned
+lcg(unsigned *st)
 {
   *st = (*st * 1664525u + 1013904223u);
   return *st;
@@ -125,20 +128,23 @@ bool lloydStep(const Image *img, Stippling *s, int W, int H, int step, float gam
       // Coordenada U normalizada en el centro del píxel
       float u = ((float)x + 0.5f) / (float)W;
 
-      // Luminancia bilineal en UV para evitar aliasing
+      // Luminancia bilineal en UV
       float lum = sampleIntensityBilinearUV(img, u, v);
 
+      double w;
+#if DEBUG_FLIP_WEIGHT
+      // Diagnóstico: favorece claros
+      w = pow(fmax(0.0, lum), (double)gamma);
+#else
       // Remapeo de contraste y umbral de blancos
-      // t: umbral; valores por encima se consideran “sin peso”
-      // c: contraste; 1/(1-t) reescala a [0,1] el rango útil
       const float t = 0.08f; // prueba 0.05..0.15
       const float c = 1.0f / (1.0f - t);
+      float dark = 1.0f - lum; // oscuridad lineal
+      dark = (dark > t) ? (dark - t) * c : 0.0f;
+      // Peso correcto: favorece oscuros
+      w = pow(dark, (double)gamma);
+#endif
 
-      float dark = 1.0f - lum;                   // oscuridad lineal
-      dark = (dark > t) ? (dark - t) * c : 0.0f; // clamp y remapeo
-
-      // Peso por oscuridad: w = (1 - lum)^gamma (clamp contra números negativos)
-      double w = pow(dark, (double)gamma);
       if (w <= 0.0)
         continue; // píxel claro o sin aporte
 

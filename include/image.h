@@ -88,3 +88,12 @@ float sampleIntensity(const Image *img, int x, int y);
  *   Devuelve 0.0f si (img == NULL) o si la imagen no esta inicializada.
  */
 float sampleIntensityBilinearUV(const Image *img, float u, float v);
+
+/**
+ * sampleRgbBilinearUV
+ * -------------------
+ * Muestrea color sRGB por bilineal en u,v in [0,1].
+ * Devuelve r,g,b en [0..255].
+ */
+void sampleRgbBilinearUV(const Image *img, float u, float v,
+                         Uint8 *r, Uint8 *g, Uint8 *b);

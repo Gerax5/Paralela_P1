@@ -1,6 +1,7 @@
 #pragma once
 #include <SDL2/SDL.h>
 #include <stdbool.h>
+#include "image.h"
 
 /*
  * stippling.h
@@ -88,3 +89,13 @@ void stipplingFree(Stippling *s);
  *   - `s` y `s->pts` deben ser validos.
  */
 void stipplingRender(const Stippling *s, SDL_Renderer *ren, int radius);
+
+/**
+ * stipplingRenderStyled
+ * ---------------------
+ * Dibuja puntos con radio por-punto en [minR,maxR] segun brillo de imagen
+ * y con color opcional muestreado de la imagen.
+ */
+void stipplingRenderStyled(const Stippling *s, SDL_Renderer *ren, int canvasW, int canvasH,
+                           const Image *img, float minR, float maxR,
+                           bool useColor, bool invertTheme);

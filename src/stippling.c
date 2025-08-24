@@ -1,6 +1,7 @@
 #include <stdlib.h>
 #include <math.h>
 #include "stippling.h"
+#include "image.h"
 
 /*
  * frand01
@@ -197,5 +198,64 @@ void stipplingRender(const Stippling *s, SDL_Renderer *ren, int radius)
 
     // Dibuja un disco lleno centrado en (x,y) con radio r
     drawFilledCircle(ren, x, y, r);
+  }
+}
+
+void stipplingRenderStyled(const Stippling *s, SDL_Renderer *ren, int canvasW, int canvasH,
+                           const Image *img, float minR, float maxR,
+                           bool useColor, bool invertTheme)
+{
+  if (!s || !s->pts)
+    return;
+
+  // Fondo/tema: solo afecta color por defecto del punto
+  Uint8 baseR = invertTheme ? 0 : 250;
+  Uint8 baseG = invertTheme ? 0 : 250;
+  Uint8 baseB = invertTheme ? 0 : 250;
+
+  float minRcl = (minR < 0.5f) ? 0.5f : minR;
+  float maxRcl = (maxR < minRcl) ? minRcl : maxR;
+
+  for (int i = 0; i < s->count; ++i)
+  {
+    float x = s->pts[i].x;
+    float y = s->pts[i].y;
+
+    // UV en canvas -> imagen
+    float u = (canvasW > 1) ? (x + 0.5f) / (float)canvasW : 0.0f;
+    float v = (canvasH > 1) ? (y + 0.5f) / (float)canvasH : 0.0f;
+
+    // Brillo y color de la imagen en la posicion del punto
+    float lum = 0.0f;
+    Uint8 r = baseR, g = baseG, b = baseB;
+
+    if (img && img->pixels)
+    {
+      lum = sampleIntensityBilinearUV(img, u, v); // [0..1]
+      if (useColor)
+        sampleRgbBilinearUV(img, u, v, &r, &g, &b);
+    }
+
+    // Radio: pequeño en zonas claras, grande en oscuras
+    float inv = 1.0f - lum; // 0 claro, 1 oscuro
+    float radius = minRcl + inv * (maxRcl - minRcl);
+    int ir = (radius < 1.0f) ? 1 : (int)radius;
+
+    // Color del punto (tema invertido solo afecta base cuando no usamos color)
+    if (!useColor)
+      SDL_SetRenderDrawColor(ren, r, g, b, 255);
+    else
+      SDL_SetRenderDrawColor(ren, r, g, b, 230);
+
+    // Disco lleno (reutiliza tu helper actual)
+    // Nota: usamos el mismo algoritmo por scanlines del módulo.
+    for (int dy = -ir; dy <= ir; ++dy)
+    {
+      int yy = (int)lroundf(y) + dy;
+      int dx = (int)sqrtf((float)(ir * ir - dy * dy));
+      int x0 = (int)lroundf(x) - dx;
+      int x1 = (int)lroundf(x) + dx;
+      SDL_RenderDrawLine(ren, x0, yy, x1, yy);
+    }
   }
 }

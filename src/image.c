@@ -11,6 +11,13 @@ static inline float srgbToLinear01(float c)
   return powf((c + 0.055f) / 1.055f, 2.4f);
 }
 
+/** Extrae R,G,B,A según el formato real de la surface. */
+static inline void unpackRGBA(const Image *img, Uint32 px,
+                              Uint8 *r, Uint8 *g, Uint8 *b, Uint8 *a)
+{
+  SDL_GetRGBA(px, img->surface->format, r, g, b, a);
+}
+
 /*
  * imageLoad
  * ----------
@@ -159,21 +166,15 @@ static inline void rgbaToUint8(Uint32 px, Uint8 *r, Uint8 *g, Uint8 *b, Uint8 *a
  */
 float sampleIntensity(const Image *img, int x, int y)
 {
-  // Validaciones rapidas y salida segura en caso de indices invalidos
   if (!img || !img->pixels || x < 0 || y < 0 || x >= img->w || y >= img->h)
     return 0.0f;
 
-  // Acceso lineal al pixel en formato RGBA32
   Uint32 px = img->pixels[y * img->pitchPixels + x];
-
-  // Desempaquetar canales (A no se usa)
   Uint8 R, G, B, A;
   (void)A;
-  rgbaToUint8(px, &R, &G, &B, &A);
+  unpackRGBA(img, px, &R, &G, &B, &A);
 
-  // Luma Rec.709 en [0..1]
   float lum = 0.2126f * (R / 255.0f) + 0.7152f * (G / 255.0f) + 0.0722f * (B / 255.0f);
-
   return lum;
 }
 
@@ -195,23 +196,16 @@ float sampleIntensity(const Image *img, int x, int y)
  *     formato o si hay dudas por plataforma, preferir SDL_GetRGBA con
  *     img->surface->format en llamadas de mas alto nivel.
  */
-static inline float lumaFromPixel(Uint32 px)
+static inline float lumaFromPixel(const Image *img, Uint32 px)
 {
-  Uint8 R8 = (px >> 24) & 0xFF;
-  Uint8 G8 = (px >> 16) & 0xFF;
-  Uint8 B8 = (px >> 8) & 0xFF;
+  Uint8 R8, G8, B8, A;
+  (void)A;
+  unpackRGBA(img, px, &R8, &G8, &B8, &A);
 
-  // Normaliza a [0,1]
-  float Rs = R8 / 255.0f;
-  float Gs = G8 / 255.0f;
-  float Bs = B8 / 255.0f;
-
-  // Pasa a lineal
+  float Rs = R8 / 255.0f, Gs = G8 / 255.0f, Bs = B8 / 255.0f;
   float R = srgbToLinear01(Rs);
   float G = srgbToLinear01(Gs);
   float B = srgbToLinear01(Bs);
-
-  // Luma Rec.709 en espacio lineal
   return 0.2126f * R + 0.7152f * G + 0.0722f * B;
 }
 
@@ -243,7 +237,6 @@ float sampleIntensityBilinearUV(const Image *img, float u, float v)
   if (!img || !img->pixels || img->w <= 0 || img->h <= 0)
     return 0.0f;
 
-  // Clamp de coordenadas normalizadas a [0,1]
   if (u < 0.f)
     u = 0.f;
   else if (u > 1.f)
@@ -253,34 +246,89 @@ float sampleIntensityBilinearUV(const Image *img, float u, float v)
   else if (v > 1.f)
     v = 1.f;
 
-  // Convertir UV -> coordenadas de pixel flotantes
   float x = u * (img->w - 1);
   float y = v * (img->h - 1);
 
-  // Indices de pixel inferior-izquierdo y sus vecinos
-  int x0 = (int)floorf(x);
-  int y0 = (int)floorf(y);
-  int x1 = (x0 + 1 < img->w) ? x0 + 1 : x0; // borde derecho: repetir x0
-  int y1 = (y0 + 1 < img->h) ? y0 + 1 : y0; // borde inferior: repetir y0
+  int x0 = (int)floorf(x), y0 = (int)floorf(y);
+  int x1 = (x0 + 1 < img->w) ? x0 + 1 : x0;
+  int y1 = (y0 + 1 < img->h) ? y0 + 1 : y0;
 
-  // Pesos de interpolacion en X e Y
-  float tx = x - (float)x0;
-  float ty = y - (float)y0;
+  float tx = x - (float)x0, ty = y - (float)y0;
 
-  // Cargar los 4 pixeles vecinos
   Uint32 p00 = img->pixels[y0 * img->pitchPixels + x0];
   Uint32 p10 = img->pixels[y0 * img->pitchPixels + x1];
   Uint32 p01 = img->pixels[y1 * img->pitchPixels + x0];
   Uint32 p11 = img->pixels[y1 * img->pitchPixels + x1];
 
-  // Convertir cada pixel a luminancia Rec.709
-  float l00 = lumaFromPixel(p00);
-  float l10 = lumaFromPixel(p10);
-  float l01 = lumaFromPixel(p01);
-  float l11 = lumaFromPixel(p11);
+  float y00 = lumaFromPixel(img, p00);
+  float y10 = lumaFromPixel(img, p10);
+  float y01 = lumaFromPixel(img, p01);
+  float y11 = lumaFromPixel(img, p11);
 
-  // Interpolacion bilineal: primero en X (dos filas), luego en Y
-  float l0 = l00 * (1.f - tx) + l10 * tx; // fila superior
-  float l1 = l01 * (1.f - tx) + l11 * tx; // fila inferior
-  return l0 * (1.f - ty) + l1 * ty;       // mezclar filas en Y
+  float yx0 = y00 + tx * (y10 - y00);
+  float yx1 = y01 + tx * (y11 - y01);
+  return yx0 + ty * (yx1 - yx0);
+}
+
+void sampleRgbBilinearUV(const Image *img, float u, float v,
+                         Uint8 *r, Uint8 *g, Uint8 *b)
+{
+  if (!img || !img->pixels || img->w <= 0 || img->h <= 0 || !r || !g || !b)
+  {
+    if (r)
+      *r = 0;
+    if (g)
+      *g = 0;
+    if (b)
+      *b = 0;
+    return;
+  }
+
+  if (u < 0.f)
+    u = 0.f;
+  else if (u > 1.f)
+    u = 1.f;
+  if (v < 0.f)
+    v = 0.f;
+  else if (v > 1.f)
+    v = 1.f;
+
+  float x = u * (img->w - 1);
+  float y = v * (img->h - 1);
+
+  int x0 = (int)floorf(x), y0 = (int)floorf(y);
+  int x1 = (x0 + 1 < img->w) ? x0 + 1 : x0;
+  int y1 = (y0 + 1 < img->h) ? y0 + 1 : y0;
+
+  float tx = x - (float)x0, ty = y - (float)y0;
+
+  Uint32 p00 = img->pixels[y0 * img->pitchPixels + x0];
+  Uint32 p10 = img->pixels[y0 * img->pitchPixels + x1];
+  Uint32 p01 = img->pixels[y1 * img->pitchPixels + x0];
+  Uint32 p11 = img->pixels[y1 * img->pitchPixels + x1];
+
+  Uint8 r00, g00, b00, a;
+  Uint8 r10, g10, b10;
+  Uint8 r01, g01, b01;
+  Uint8 r11, g11, b11;
+  unpackRGBA(img, p00, &r00, &g00, &b00, &a);
+  unpackRGBA(img, p10, &r10, &g10, &b10, &a);
+  unpackRGBA(img, p01, &r01, &g01, &b01, &a);
+  unpackRGBA(img, p11, &r11, &g11, &b11, &a);
+
+  float rx0 = r00 + tx * (r10 - r00);
+  float gx0 = g00 + tx * (g10 - g00);
+  float bx0 = b00 + tx * (b10 - b00);
+
+  float rx1 = r01 + tx * (r11 - r01);
+  float gx1 = g01 + tx * (g11 - g01);
+  float bx1 = b01 + tx * (b11 - b01);
+
+  float rf = rx0 + ty * (rx1 - rx0);
+  float gf = gx0 + ty * (gx1 - gx0);
+  float bf = bx0 + ty * (bx1 - bx0);
+
+  *r = (Uint8)(rf + 0.5f);
+  *g = (Uint8)(gf + 0.5f);
+  *b = (Uint8)(bf + 0.5f);
 }
