@@ -6,11 +6,11 @@ sudo apt-get install build-essential libsdl2-dev libsdl2-image-dev
 
 ```bash
 mkdir -p build/bin
-gcc src/main.c src/app.c src/render_sdl.c src/image.c src/stippling.c src/lloyd.c src/utils.c \
-  -Iinclude -o build/bin/stippling_demo \
-  $(sdl2-config --cflags --libs) $(pkg-config --cflags --libs SDL2_image) -lm
-
-./build/bin/stippling_demo images/input/cabra.png
+gcc -std=c11 -O2 -Wall -Wextra \
+  $(sdl2-config --cflags) $(pkg-config --cflags SDL2_image) -Iinclude \
+  src/main.c src/app.c src/image.c src/stippling.c src/lloyd.c src/voronoi.c src/utils.c \
+  $(sdl2-config --libs) $(pkg-config --libs SDL2_image) -lm \
+  -o build/bin/stippling_demo
 ```
 
 ### Controles actuales

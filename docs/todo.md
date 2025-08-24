@@ -16,7 +16,6 @@
 │   ├── config.h            # DEFAULT_THREADS, DEFAULT_SCHEDULE, etc.
 │   ├── image.h
 │   ├── lloyd.h
-│   ├── render_sdl.h
 │   ├── stippling.h
 │   └── voronoi.h
 ├── src/
@@ -26,7 +25,6 @@
 │   ├── lloyd.c             # centros de masa ponderados
 │   ├── stippling.c         # estado de puntos, radios, init
 │   ├── voronoi.c           # asignación píxel→punto (tileado)
-│   ├── render_sdl.c        # dibujo puntos/overlay FPS con SDL2
 │   └── util.c              # timers, clamps, RNG
 ├── images/
 │   ├── input/
@@ -60,7 +58,6 @@
   - `lloyd.c`: centros de masa ponderados por intensidad.
   - `stippling.c`: init y actualización de puntos (pos/radio).
   - `voronoi.c`: asignación píxel→stipple (dist mínima; versión tileada).
-  - `render_sdl.c`: dibuja puntos/overlay de métricas; color/gradientes.
   - `util.c`: cronómetro de alta resolución, helpers.
 - **images/**:
 
@@ -120,7 +117,7 @@ SRC_DIR   := src
 OBJ_DIR   := build/obj
 BIN_DIR   := build/bin
 
-SRC_COMMON:= main.c app.c image.c lloyd.c stippling.c voronoi.c render_sdl.c util.c
+SRC_COMMON:= main.c app.c image.c lloyd.c stippling.c voronoi.c util.c
 SRC_PATHS := $(addprefix $(SRC_DIR)/,$(SRC_COMMON))
 OBJ_SEQ   := $(addprefix $(OBJ_DIR)/,$(SRC_COMMON:.c=.seq.o))
 OBJ_OMP   := $(addprefix $(OBJ_DIR)/,$(SRC_COMMON:.c=.omp.o))

@@ -157,7 +157,6 @@ Llamar exactamente una vez cuando ya no se necesite renderizar ni acceder a la i
 - `lloyd.c`: implementa el paso de Lloyd con ponderacion por oscuridad y nearest usando `UniformGrid`.
 - `voronoi.c`: indice espacial (grilla) para acelerar la busqueda del punto mas cercano.
 - `stippling.c`: estado y renderizado de la nube de puntos.
-- `render_sdl.c`: utilidades de dibujo (no critica aqui).
 
 ## Parametros importantes en runtime
 

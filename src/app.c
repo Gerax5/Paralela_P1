@@ -5,7 +5,6 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <errno.h>
-#include "render_sdl.h"
 #include "app.h"
 #include "config.h"
 #include "image.h"

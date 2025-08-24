@@ -115,7 +115,7 @@ float sampleIntensityBilinearUV(const Image *img, float u, float v);
 - Muestreo bilineal de luminancia Rec.709 en coordenadas normalizadas `u, v in [0, 1]`.
 - Útil para mapear canvas (W x H) a imagen (w x h) sin aliasing fuerte.
 
-**Notas**
+**Notas:**
 
 - Todos los muestreos asumen formato `RGBA8888` ya convertido en `imageLoad`.
 - La luminancia se calcula con Rec.709: `0.2126 R + 0.7152 G + 0.0722 B`.
@@ -223,25 +223,3 @@ int  gridNearest(const UniformGrid *g, const Stippling *s, float x, float y, int
 
 - Si los puntos cambian mucho de posicion (por Lloyd), conviene reconstruir la grilla por iteracion.
 - No es thread-safe.
-
-## `include/render_sdl.h`
-
-**Responsabilidad:** helpers de dibujo opcionales.
-
-```c
-void renderFrame(SDL_Renderer *ren, int w, int h, double t);
-```
-
-- Ejemplo simple de animacion; no es parte del pipeline de Lloyd.
-- Se puede usar como overlay o demo visual independiente.
-
-## Relaciones y flujo
-
-1. `app.c` orquesta: init SDL + imagen, crea `Stippling`, loop de eventos, invoca `lloydStep`, dibuja puntos, opcionalmente dibuja fondo y guarda captura.
-2. `lloyd.c` hace el trabajo pesado:
-
-   - Construye `UniformGrid` (`voronoi.c`)
-   - Recorre el canvas muestreado (stride), consulta NN por grilla, acumula centroides, actualiza puntos.
-   - Muestrea la imagen `Image` con bilinear UV (`image.c`).
-3. `stippling.c` maneja estado y render de puntos.
-4. `render_sdl.c` puede aportar utilidades de dibujo adicionales.
