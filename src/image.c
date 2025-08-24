@@ -3,6 +3,14 @@
 #include <math.h>
 #include "image.h"
 
+static inline float srgbToLinear01(float c)
+{
+  // c en [0,1] sRGB -> lineal (IEC 61966-2-1)
+  if (c <= 0.04045f)
+    return c / 12.92f;
+  return powf((c + 0.055f) / 1.055f, 2.4f);
+}
+
 /*
  * imageLoad
  * ----------
@@ -189,12 +197,22 @@ float sampleIntensity(const Image *img, int x, int y)
  */
 static inline float lumaFromPixel(Uint32 px)
 {
-  Uint8 R = (px >> 24) & 0xFF; // extraer canal rojo
-  Uint8 G = (px >> 16) & 0xFF; // extraer canal verde
-  Uint8 B = (px >> 8) & 0xFF;  // extraer canal azul
+  Uint8 R8 = (px >> 24) & 0xFF;
+  Uint8 G8 = (px >> 16) & 0xFF;
+  Uint8 B8 = (px >> 8) & 0xFF;
 
-  // Luma Rec.709 en [0..1]
-  return 0.2126f * (R / 255.0f) + 0.7152f * (G / 255.0f) + 0.0722f * (B / 255.0f);
+  // Normaliza a [0,1]
+  float Rs = R8 / 255.0f;
+  float Gs = G8 / 255.0f;
+  float Bs = B8 / 255.0f;
+
+  // Pasa a lineal
+  float R = srgbToLinear01(Rs);
+  float G = srgbToLinear01(Gs);
+  float B = srgbToLinear01(Bs);
+
+  // Luma Rec.709 en espacio lineal
+  return 0.2126f * R + 0.7152f * G + 0.0722f * B;
 }
 
 /*

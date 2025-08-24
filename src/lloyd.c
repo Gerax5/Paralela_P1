@@ -5,13 +5,6 @@
 #include "stippling.h"
 #include "voronoi.h"
 
-#include "lloyd.h"
-#include "image.h"
-#include "stippling.h"
-#include <stdlib.h>
-#include <math.h>
-#include "voronoi.h"
-
 /*
  * lloyd.c
  * --------
@@ -25,6 +18,13 @@
  *   - El parametro "step" controla el stride de muestreo del canvas.
  *   - Se acumulan sumas ponderadas por punto y luego se actualizan los centroides.
  */
+
+static inline unsigned lcg(unsigned *st)
+{
+  *st = (*st * 1664525u + 1013904223u);
+  return *st;
+}
+static inline int irand_range(unsigned *st, int hi) { return (int)(lcg(st) % (unsigned)hi); }
 
 /*
  * clampi
@@ -128,8 +128,17 @@ bool lloydStep(const Image *img, Stippling *s, int W, int H, int step, float gam
       // Luminancia bilineal en UV para evitar aliasing
       float lum = sampleIntensityBilinearUV(img, u, v);
 
+      // Remapeo de contraste y umbral de blancos
+      // t: umbral; valores por encima se consideran “sin peso”
+      // c: contraste; 1/(1-t) reescala a [0,1] el rango útil
+      const float t = 0.08f; // prueba 0.05..0.15
+      const float c = 1.0f / (1.0f - t);
+
+      float dark = 1.0f - lum;                   // oscuridad lineal
+      dark = (dark > t) ? (dark - t) * c : 0.0f; // clamp y remapeo
+
       // Peso por oscuridad: w = (1 - lum)^gamma (clamp contra números negativos)
-      double w = pow(fmaxf(0.0f, 1.0f - lum), (double)gamma);
+      double w = pow(dark, (double)gamma);
       if (w <= 0.0)
         continue; // píxel claro o sin aporte
 
@@ -160,7 +169,7 @@ bool lloydStep(const Image *img, Stippling *s, int W, int H, int step, float gam
     }
   }
 
-  // Actualización de centroides: dividir sumas por el peso total
+  // --- Actualización normal (centroides) ---
   for (int i = 0; i < n; i++)
   {
     if (sumW[i] > 0.0)
@@ -168,7 +177,32 @@ bool lloydStep(const Image *img, Stippling *s, int W, int H, int step, float gam
       s->pts[i].x = (float)(sumX[i] / sumW[i]);
       s->pts[i].y = (float)(sumY[i] / sumW[i]);
     }
-    // Si sumW[i] == 0, el punto no recibió píxeles y permanece donde estaba.
+  }
+
+  // --- RESEED de huérfanos: mover semillas con sumW == 0 a un píxel oscuro ---
+  unsigned st = (unsigned)(n ^ W ^ H) + 0x9E3779B9u; // semilla base reproducible
+  for (int i = 0; i < n; i++)
+  {
+    if (sumW[i] > 0.0)
+      continue;
+
+    // intentar unas cuantas veces encontrar un píxel con peso > eps
+    const int maxTries = 64;
+    for (int t = 0; t < maxTries; ++t)
+    {
+      int rx = irand_range(&st, W);
+      int ry = irand_range(&st, H);
+      float u = ((float)rx + 0.5f) / (float)W;
+      float v = ((float)ry + 0.5f) / (float)H;
+      float lum = sampleIntensityBilinearUV(img, u, v);
+      double w = pow(fmaxf(0.0f, 1.0f - lum), (double)gamma);
+      if (w > 1e-6)
+      { // umbral pequeño
+        s->pts[i].x = (float)rx;
+        s->pts[i].y = (float)ry;
+        break;
+      }
+    }
   }
 
   // Limpieza

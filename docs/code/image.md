@@ -1,19 +1,31 @@
 # `image.c` — carga y muestreo de imágenes
 
-Pequeño módulo para cargar una imagen con SDL_image y muestrearla en escala de grises (luminancia Rec.709), con soporte de muestreo puntual (nearest) y bilineal en coordenadas normalizadas.
+Módulo para cargar una imagen con SDL_image y muestrearla en escala de grises (luminancia Rec.709). Soporta muestreo puntual (nearest) y bilineal en coordenadas normalizadas.
+**Novedad:** el camino bilineal convierte de **sRGB a lineal** antes de calcular la luma, lo que mejora mucho el contraste real.
 
 ## Dependencias
 
-- SDL2_image para `IMG_Load` y `IMG_Save*` si se necesita.
-- SDL2 para tipos y utilidades (`SDL_Surface`, formatos de pixel, etc.).
+- SDL2_image para `IMG_Load`.
+- SDL2 para `SDL_Surface`, formatos de pixel y utilidades.
 
 ## Suposiciones de formato
 
 - Al cargar, la imagen se convierte a `SDL_PIXELFORMAT_RGBA32` para tener un layout homogéneo.
 - `img->pixels` apunta al buffer interno de `img->surface`.
 - `img->pitchPixels == surface->pitch / 4` (4 bytes por pixel en RGBA8888).
-- Las funciones internas que desempaquetan canales por shifts asumen layout 0xRRGGBBAA.
-  Si necesitas independencia total del formato, usa `SDL_GetRGBA(px, surface->format, ...)`.
+- Los helpers internos que desempaquetan canales por shifts asumen layout `0xRRGGBBAA`. Para portabilidad total, usar `SDL_GetRGBA(px, surface->format, ...)`.
+
+## Colorimetría y espacio de color
+
+- **`srgbToLinear01`** aplica la curva IEC 61966-2-1 (sRGB) para pasar a **espacio lineal**.
+- **`lumaFromPixel`** usa esa conversión y luego aplica **coeficientes Rec.709** en lineal:
+
+  ```bash
+  Y = 0.2126*R + 0.7152*G + 0.0722*B
+  ```
+
+- **`sampleIntensityBilinearUV`** llama a `lumaFromPixel`, así que su luminancia es **lineal y físicamente coherente**.
+- **`sampleIntensity` (nearest)** mantiene un atajo rápido usando bytes normalizados sin pasar por sRGB->lineal. Es más barato, pero puede diferir levemente del bilineal en zonas claras/oscuras. Si se desea máxima consistencia, se puede actualizar para que también use la conversión (a costa de unas pocas operaciones extra).
 
 ## Tipos usados
 
@@ -30,7 +42,7 @@ typedef struct {
 
 ### `bool imageLoad(Image *img, const char *path)`
 
-Carga una imagen desde disco usando SDL_image y la convierte a `RGBA32`.
+Carga una imagen desde disco y la convierte a `RGBA32`.
 
 **Flujo:**
 
@@ -38,8 +50,10 @@ Carga una imagen desde disco usando SDL_image y la convierte a `RGBA32`.
 2. `SDL_ConvertSurfaceFormat(..., SDL_PIXELFORMAT_RGBA32, 0)`
 3. Rellena `img` con `surface`, `pixels`, `w`, `h`, `pitchPixels`.
 
-**Retorna**
-`true` si la carga + conversión fue exitosa, `false` en caso de error (se loguea en `stderr`).
+**Retorno:**
+
+- `true` si la carga y conversión fue exitosa.
+- `false` si falla (se loguea en `stderr`).
 
 **Notas:**
 
@@ -58,69 +72,36 @@ Libera la `SDL_Surface` y deja `img` en estado neutro.
 
 ### `static inline void rgbaToUint8(Uint32 px, Uint8 *r, Uint8 *g, Uint8 *b, Uint8 *a)` *(interno)*
 
-Desempaqueta un pixel de 32 bits a canales de 8 bits con corrimientos de bits.
-
-**Importante:**
-
-Asume layout 0xRRGGBBAA. Para total portabilidad, preferir `SDL_GetRGBA`.
+Desempaqueta un pixel de 32 bits a canales de 8 bits mediante shifts y máscaras.
+**Asume** layout `0xRRGGBBAA`.
 
 ### `float sampleIntensity(const Image *img, int x, int y)`
 
-Muestreo puntual (nearest) en coordenadas de pixel. Retorna luminancia Rec.709 en `[0,1]`.
-
-**Comportamiento:**
-
-- Si `img`/`pixels` es `NULL` o `(x,y)` está fuera de rango -> retorna `0.0f`.
-- Lee el pixel, desempaqueta `R,G,B` e integra:
-
-  ```bash
-  Y = 0.2126*R + 0.7152*G + 0.0722*B   (con R,G,B normalizados a [0..1])
-  ```
-
-**Uso:**
-
-- Rápido y suficiente cuando no se requiere filtrado.
+Muestreo **nearest** en coordenadas de pixel. Retorna luminancia Rec.709 en `[0,1]` usando bytes normalizados (sin sRGB->lineal).
+Devuelve `0.0f` si parámetros o rangos no son válidos.
 
 ### `static inline float lumaFromPixel(Uint32 px)` *(interno)*
 
-Luminancia Rec.709 en `[0,1]` a partir de un `Uint32` empaquetado.
-
-**Notas**
-Mismos supuestos de layout que `rgbaToUint8`.
+Convierte canales sRGB -> lineal y calcula luma Rec.709 en `[0,1]`.
 
 ### `float sampleIntensityBilinearUV(const Image *img, float u, float v)`
 
-Muestreo bilineal en coordenadas normalizadas `u,v` en `[0,1]`.
-
-**Flujo:**
-
-1. Clampea `u` y `v` a `[0,1]`.
-2. Convierte a coords flotantes `(x,y)` en `[0..w-1] x [0..h-1]`.
-3. Toma `p00, p10, p01, p11` y hace interpolación:
-
-   - Interpola en X en la fila superior e inferior.
-   - Interpola en Y entre los dos resultados.
-
-**Bordes:**
-
-Evita salir de rango forzando `x1 == x0` o `y1 == y0` cuando corresponde.
-
-**Uso:**
-
-- Útil para muestrear la imagen al tamaño del canvas o cuando se necesita suavizado.
+Muestreo **bilineal** en `u,v` en `[0,1]`.
+Clampea `u,v`, convierte a `(x,y)`, toma `p00,p10,p01,p11`, evalúa luma **en lineal** y mezcla bilinealmente.
+Devuelve `0.0f` si la imagen no es válida.
 
 ## Errores y retorno
 
-- `imageLoad` retorna `false` y loguea el motivo si falla `IMG_Load` o la conversión de formato.
-- Los muestreos retornan `0.0f` si los parámetros o la imagen no son válidos.
+- `imageLoad` retorna `false` y explica el motivo si falla `IMG_Load` o la conversión de formato.
+- Los muestreos retornan `0.0f` si la imagen o parámetros no son válidos.
 
 ## Rendimiento
 
-- `sampleIntensity` hace 1 lectura de pixel.
-- `sampleIntensityBilinearUV` hace 4 lecturas y algunas operaciones de mezcla.
-- Para Lloyd con canvas grande, bilinear mejora calidad perceptual a cambio de un costo mínimo.
+- `sampleIntensity` hace 1 lectura de pixel y operaciones mínimas; es el camino más barato.
+- `sampleIntensityBilinearUV` hace 4 lecturas, sRGB->lineal y mezclas; mayor costo pero **mejor fidelidad**.
+- Para Lloyd en tiempo real, bilineal lineal ofrece mejor mapeo de densidad a un costo aceptable.
 
-## Ejemplos de uso
+## Ejemplo
 
 ```c
 Image img;
@@ -128,10 +109,10 @@ if (!imageLoad(&img, "images/input/twitch.png")) {
   // manejar error
 }
 
-// nearest en pixel (100, 50)
+// nearest en pixel (100, 50) (aprox en sRGB)
 float y0 = sampleIntensity(&img, 100, 50);
 
-// bilinear en UV
+// bilinear en UV (correcto en lineal)
 float y1 = sampleIntensityBilinearUV(&img, 0.33f, 0.75f);
 
 imageFree(&img);
