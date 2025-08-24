@@ -2,15 +2,15 @@
 #include <SDL2/SDL_image.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <errno.h>
 #include "render_sdl.h"
 #include "app.h"
 #include "config.h"
 #include "image.h"
 #include "stippling.h"
 #include "lloyd.h"
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <errno.h>
 
 /*
  * Estructura principal de la aplicación.
