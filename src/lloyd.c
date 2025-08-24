@@ -37,8 +37,15 @@ bool lloydStep(const Image *img, Stippling *s, int W, int H, int step, float gam
       int ix = (int)((long long)x * img->w / (long long)W);
       ix = clampi(ix, 0, img->w - 1);
 
-      float lum = sampleIntensity(img, ix, iy);
-      double w = pow(fmax(0.0f, 1.0f - lum), (double)gamma);
+      // coords normalizadas del centro del píxel
+      float u = ((float)x + 0.5f) / (float)W;
+      float v = ((float)y + 0.5f) / (float)H;
+
+      // luminancia bilineal
+      float lum = sampleIntensityBilinearUV(img, u, v);
+
+      // peso por oscuridad (1 - luminancia)^gamma
+      double w = pow(fmaxf(0.0f, 1.0f - lum), (double)gamma);
       if (w <= 0.0)
         continue;
 

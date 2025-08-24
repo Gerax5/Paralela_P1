@@ -8,6 +8,9 @@
 #include "image.h"
 #include "stippling.h"
 #include "lloyd.h"
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <errno.h>
 
 /*
  * Estructura principal de la aplicación.
@@ -34,6 +37,10 @@ struct App
   int pixelStride;
   float gammaW;
   unsigned seed;
+
+  bool showBg;
+  int dotRadius;
+  bool wantScreenshot;
 };
 
 /*
@@ -43,10 +50,55 @@ static void updateFpsTitle(App *app)
 {
   double fps = (app->accTime > 0.0) ? (app->frames / app->accTime) : 0.0;
   char title[160];
-  snprintf(title, sizeof(title), "%s — FPS: %.1f | it=%d step=%d gamma=%.2f%s",
+  snprintf(title, sizeof(title),
+           "%s — FPS: %.1f | it=%d step=%d gamma=%.2f | r=%d%s%s",
            defaultTitle, fps, app->iters, app->pixelStride, app->gammaW,
-           app->autoRun ? " [AUTO]" : "");
+           app->dotRadius,
+           app->autoRun ? " [AUTO]" : "",
+           app->showBg ? "" : " [BG OFF]");
   SDL_SetWindowTitle(app->win, title);
+}
+
+static bool saveScreenshot(App *app)
+{
+  // Asegura que exista images/output
+  struct stat st;
+  if (stat("images/output", &st) != 0)
+  {
+    if (mkdir("images/output", 0755) != 0 && errno != EEXIST)
+    {
+      perror("mkdir images/output");
+      return false;
+    }
+  }
+
+  SDL_Surface *surf = SDL_CreateRGBSurfaceWithFormat(0, app->w, app->h, 32, SDL_PIXELFORMAT_RGBA32);
+  if (!surf)
+  {
+    fprintf(stderr, "CreateRGBSurface: %s\n", SDL_GetError());
+    return false;
+  }
+
+  if (SDL_RenderReadPixels(app->ren, NULL, SDL_PIXELFORMAT_RGBA32, surf->pixels, surf->pitch) != 0)
+  {
+    fprintf(stderr, "RenderReadPixels: %s\n", SDL_GetError());
+    SDL_FreeSurface(surf);
+    return false;
+  }
+
+  char path[256];
+  snprintf(path, sizeof(path), "images/output/stipple_%05d.png", app->iters);
+
+  if (IMG_SavePNG(surf, path) != 0)
+  { // 0 = OK
+    fprintf(stderr, "IMG_SavePNG(%s): %s\n", path, IMG_GetError());
+    SDL_FreeSurface(surf);
+    return false;
+  }
+
+  printf("Saved %s\n", path);
+  SDL_FreeSurface(surf);
+  return true;
 }
 
 /*
@@ -145,6 +197,13 @@ bool appInit(App **outApp, int width, int height, const char *title, const char 
   app->gammaW = defaultGamma;
   app->seed = 42u;
 
+  app->showBg = true;          // fondo visible por defecto
+  app->dotRadius = 2;          // radio inicial de puntos
+  app->wantScreenshot = false; // sin captura pendiente
+
+  printf("[SPACE] paso Lloyd | [A] auto | [-]/[+] step | [G]/[H] gamma | [B] fondo | [Z]/[X] radio | [R] reseed | [P] screenshot\n");
+  fflush(stdout);
+
   *outApp = app;
   return true;
 }
@@ -228,6 +287,32 @@ void appRun(App *app)
           updateFpsTitle(app);
         }
 
+        // Toggle fondo
+        if (sym == SDLK_b)
+        {
+          app->showBg = !app->showBg;
+          updateFpsTitle(app);
+        }
+        // Radio de puntos: Z (-) / X (+)
+        if (sym == SDLK_z)
+        {
+          if (app->dotRadius > 1)
+            app->dotRadius--;
+          updateFpsTitle(app);
+        }
+        if (sym == SDLK_x)
+        {
+          if (app->dotRadius < 20)
+            app->dotRadius++;
+          updateFpsTitle(app);
+        }
+
+        // Marcar captura para el final del frame actual
+        if (sym == SDLK_p)
+        {
+          app->wantScreenshot = true;
+        }
+
         // 6) re-seed puntos
         if (sym == SDLK_r)
         {
@@ -265,17 +350,20 @@ void appRun(App *app)
     SDL_SetRenderDrawColor(app->ren, 12, 16, 28, 255);
     SDL_RenderClear(app->ren);
 
-    // Dibujar la imagen si existe
-    if (app->imageTex)
+    // Dibujar la imagen si existe (y si showBg == true)
+    if (app->showBg && app->imageTex)
     {
-      SDL_Rect dst = {0, 0, app->w, app->h}; // estirar la imagen a la ventana
+      SDL_Rect dst = {0, 0, app->w, app->h};
       SDL_RenderCopy(app->ren, app->imageTex, NULL, &dst);
     }
 
-    stipplingRender(&app->stip, app->ren, 2);
+    stipplingRender(&app->stip, app->ren, app->dotRadius);
 
-    // Render principal (cuadrado y círculo pulsante)
-    // renderFrame(app->ren, app->w, app->h, app->accTime);
+    if (app->wantScreenshot)
+    {
+      saveScreenshot(app); // lee los píxeles ya renderizados
+      app->wantScreenshot = false;
+    }
     SDL_RenderPresent(app->ren);
   }
 }

@@ -2,7 +2,7 @@
 #define defaultWidth 800
 #define defaultHeight 600
 #define defaultTitle "Voronoi Stippling — bootstrap"
-#define defaultImagePath "images/input/cabra.png"
+#define defaultImagePath "images/input/twitch.png"
 
 #define defaultNPoints 1000
 #define defaultLloydStep 3
