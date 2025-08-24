@@ -41,7 +41,7 @@ static void updateFpsTitle(App *app)
  * Inicializa SDL, SDL_image, la ventana, renderer y carga la imagen por defecto.
  * Retorna true si todo se inicializa correctamente.
  */
-bool appInit(App **outApp, int width, int height, const char *title)
+bool appInit(App **outApp, int width, int height, const char *title, const char *imagePath)
 {
   if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER) != 0)
   {
@@ -101,16 +101,21 @@ bool appInit(App **outApp, int width, int height, const char *title)
 
   /*
    * Carga la imagen por defecto
-   * Si falla, continúa sin textura
+   * Si falla, continúa sin textura o por CLI
    */
-  if (!imageLoad(&app->image, defaultImagePath))
+  const char *path = (imagePath && *imagePath) ? imagePath : defaultImagePath;
+  if (!imageLoad(&app->image, path))
   {
-    fprintf(stderr, "No se pudo cargar %s, continúo sin imagen.\n", defaultImagePath);
+    fprintf(stderr, "No se pudo cargar %s, continúo sin imagen.\n", path);
     app->imageTex = NULL;
   }
   else
   {
     app->imageTex = SDL_CreateTextureFromSurface(app->ren, app->image.surface);
+    if (!app->imageTex)
+    {
+      fprintf(stderr, "SDL_CreateTextureFromSurface: %s\n", SDL_GetError());
+    }
   }
 
   *outApp = app;

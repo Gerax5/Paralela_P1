@@ -3,6 +3,6 @@
 
 typedef struct App App;
 
-bool appInit(App **outApp, int width, int height, const char *title);
-void appRun(App *app);      // loop principal (ESC para salir)
-void appShutdown(App *app); // libera SDL y memoria
+bool appInit(App **outApp, int width, int height, const char *title, const char *imagePath);
+void appRun(App *app);
+void appShutdown(App *app);
