@@ -27,7 +27,7 @@ bool appInit(App **outApp,
              int npoints);
 ```
 
-- **Crea** ventana y renderer SDL2, inicializa SDL\_image, carga la imagen (si `imagePath != NULL`), y si no, usa `defaultImagePath`.
+- **Crea** ventana y renderer SDL2, inicializa SDL_image, carga la imagen (si `imagePath != NULL`), y si no, usa `defaultImagePath`.
 
 - Inicializa el conjunto de puntos de stippling con `npoints` (si `npoints <= 0`, se usa `defaultNPoints` de `config.h`).
 - **Precondiciones:** `outApp != NULL`.
@@ -43,7 +43,7 @@ void appRun(App *app);
 void appShutdown(App *app);
 ```
 
-- Libera todos los recursos (renderer, ventana, texturas, superficies, memoria de puntos) y cierra SDL/SDL\_image.
+- Libera todos los recursos (renderer, ventana, texturas, superficies, memoria de puntos) y cierra SDL/SDL_image.
 
 **Notas:**
 
@@ -92,7 +92,7 @@ typedef struct {
 bool imageLoad(Image *img, const char *path);
 ```
 
-- Carga PNG/JPG con SDL2\_image y convierte a `SDL_PIXELFORMAT_RGBA32`.
+- Carga PNG/JPG con SDL2_image y convierte a `SDL_PIXELFORMAT_RGBA32`.
 - Deja `img->pixels` apuntando a los datos de la superficie convertida.
 
 ```c

@@ -90,7 +90,7 @@ Uso:
 
 - **GCC/OpenMP**: se activa con `-fopenmp`.
 - **SDL2**: se enlaza con `sdl2-config --cflags --libs`.
-- **SDL2\_image**: necesaria para cargar PNG/JPG.
+- **SDL2_image**: necesaria para cargar PNG/JPG.
 
   - Se añade con `pkg-config --cflags --libs SDL2_image`.
   - Enlace final incluye: `-lSDL2_image -lm`.
@@ -104,7 +104,7 @@ Uso:
 
 - Y sobreescribirlas con argumentos en tiempo de ejecución (`./stippling_omp 3000 8 dynamic`).
 
-## 4. Makefile mínimo (OpenMP + SDL2 + SDL2\_image)
+## 4. Makefile mínimo (OpenMP + SDL2 + SDL2_image)
 
 ```make
 # --- Config ---
