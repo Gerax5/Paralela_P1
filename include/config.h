@@ -3,3 +3,4 @@
 #define defaultWidth 800
 #define defaultHeight 600
 #define defaultTitle "Voronoi Stippling — bootstrap"
+#define defaultImagePath "images/input/uvg.png"
