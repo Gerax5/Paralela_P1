@@ -1,21 +1,20 @@
+// app.c
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_image.h>
+#include <SDL2/SDL_ttf.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <errno.h>
 #include <string.h>
+
 #include "app.h"
 #include "config.h"
 #include "image.h"
 #include "stippling.h"
 #include "lloyd.h"
 #include "utils.h"
-#include <SDL2/SDL_ttf.h>
-#include <sys/stat.h>
-#include <errno.h>
-
 
 /*
  * App
@@ -36,11 +35,14 @@ struct App
   int h; // alto  de ventana
 
   // --- Reloj / metricas
-  Uint64 freq;          // SDL_GetPerformanceFrequency()
-  Uint64 last;          // ultima lectura de contador (para dt)
-  double accTime;       // segundos acumulados desde appInit
-  int frames;           // frames renderizados
-  double lastFpsUpdate; // timestamp ultima actualizacion de titulo
+  Uint64 freq;      // SDL_GetPerformanceFrequency()
+  Uint64 last;      // ultima lectura de contador (para dt)
+  double accTime;   // segundos acumulados desde appInit
+  int    frames;    // frames renderizados
+
+  // Cache de UI (para no recalcular cada frame)
+  double fpsAvg;        // FPS promedio desde el inicio, cacheado
+  double lastUiUpdate;  // último timestamp en el que se refrescó título/overlay
 
   // --- Recursos de imagen / puntos
   Image image;           // surface RGBA8888 + acceso a pixeles
@@ -52,41 +54,41 @@ struct App
   float maxRadius;       // radio maximo por punto (px)  [>= minRadius]
 
   // --- Lloyd (parametros/estado)
-  bool autoRun;    // ON: ejecuta un paso de Lloyd por frame
-  int iters;       // iteraciones de Lloyd acumuladas
-  int pixelStride; // stride de muestreo (>=1)  [mayor = mas rapido/menos preciso]
-  float gammaW;    // exponente del peso; segun config:
-                   //   STIPPLE_WEIGHT_BY_BRIGHTNESS==1 -> w = lum^gammaW
-                   //   STIPPLE_WEIGHT_BY_BRIGHTNESS==0 -> w = (1 - lum)^gammaW
-  unsigned seed;   // semilla para resembrar la nube (tecla R)
+  bool  autoRun;     // ON: ejecuta un paso de Lloyd por frame
+  int   iters;       // iteraciones de Lloyd acumuladas
+  int   pixelStride; // stride de muestreo (>=1)  [mayor = mas rapido/menos preciso]
+  float gammaW;      // exponente del peso; segun config:
+                     //   STIPPLE_WEIGHT_BY_BRIGHTNESS==1 -> w = lum^gammaW
+                     //   STIPPLE_WEIGHT_BY_BRIGHTNESS==0 -> w = (1 - lum)^gammaW
+  unsigned seed;     // semilla para resembrar la nube (tecla R)
 
   // --- Opciones visuales / utilidades
   bool showBg;         // ON: dibuja la imagen de fondo
-  int dotRadius;       // radio visual fijo (solo en stipplingRender)
+  int  dotRadius;      // radio visual fijo (solo en stipplingRender)
   bool wantScreenshot; // marca para guardar PNG al final del frame actual
 
   // --- Modo batch / logging
-  int maxIters;      // si >0, salir cuando iters >= maxIters
-  char *metricsPath; // ruta CSV para log de metricas (propiedad de App; se libera)
+  int   maxIters;      // si >0, salir cuando iters >= maxIters
+  char *metricsPath;   // ruta CSV para log de metricas (propiedad de App; se libera)
 
   // --- Sweep de gamma (testing por entorno)
-  bool sweepGamma;           // ON: barrido de gamma automatico
-  float gStart, gEnd, gStep; // rango e incremento de gamma
-  int gEvery;                // aplicar incremento cada N iteraciones
+  bool  sweepGamma;           // ON: barrido de gamma automatico
+  float gStart, gEnd, gStep;  // rango e incremento de gamma
+  int   gEvery;               // aplicar incremento cada N iteraciones
+
   // --- Overlay FPS
-  TTF_Font    *font;         // fuente para texto
-  SDL_Texture *fpsTex;       // textura cacheada del texto "FPS: ... "
+  TTF_Font    *font;   // fuente para texto
+  SDL_Texture *fpsTex; // textura cacheada del texto "FPS: ... "
   int          fpsTexW;
   int          fpsTexH;
-  double       lastFpsOverlayUpdate; // última vez que refrescamos el texto
 
   // --- Lista de fondos
   char  **bgPaths;
   int     bgCount;
   int     bgIndex;
 
-  double bgTimer;    // segundos acumulados desde el último cambio
-  double bgPeriod;   // cada cuántos segundos cambiar de imagen (>0 activa)
+  double bgTimer;   // segundos acumulados desde el último cambio
+  double bgPeriod;  // cada cuántos segundos cambiar de imagen (>0 activa)
 };
 
 /**
@@ -95,7 +97,7 @@ struct App
  * Regenera la textura de texto del overlay de FPS/estado.
  *
  * Flujo:
- *   1) Construye el string con FPS, iters, step y gamma.
+ *   1) Construye el string con FPS (cacheado), iters, step y gamma.
  *   2) Renderiza texto con TTF_RenderText_Blended (color según tema).
  *   3) Crea SDL_Texture desde el surface y cachea en app->fpsTex (+ ancho/alto).
  *   4) Libera la textura previa si existía.
@@ -107,16 +109,12 @@ struct App
  *   - Se invoca cada ~0.25s desde appRun() para evitar costo por frame.
  *   - Si no hay fuente (app->font == NULL) no hace nada.
  */
-
 static void refreshFpsOverlay(App *app) {
   if (!app->font) return;
 
-  // FPS promedio desde el inicio (igual que en el título)
-  double fps = (app->accTime > 0.0) ? (app->frames / app->accTime) : 0.0;
-
   char buf[96];
   snprintf(buf, sizeof(buf), "FPS: %.1f | it=%d | step=%d | gamma=%.2f",
-           fps, app->iters, app->pixelStride, app->gammaW);
+           app->fpsAvg, app->iters, app->pixelStride, app->gammaW);
 
   SDL_Color color = app->invertTheme
                       ? (SDL_Color){ 10, 10, 10, 255 }
@@ -135,9 +133,7 @@ static void refreshFpsOverlay(App *app) {
     return;
   }
 
-  // Limpia textura anterior
   if (app->fpsTex) SDL_DestroyTexture(app->fpsTex);
-
   app->fpsTex  = tex;
   app->fpsTexW = surf->w;
   app->fpsTexH = surf->h;
@@ -185,10 +181,6 @@ static void drawFpsOverlay(App *app) {
  *
  * Params:
  *   path -> ruta del directorio (p.ej. "images/output").
- *
- * Notas:
- *   - Usa stat(...) y mkdir(..., 0755).
- *   - Ignora errno == EEXIST para ser idempotente.
  */
 static void ensureDir(const char* path) {
   struct stat st;
@@ -198,7 +190,6 @@ static void ensureDir(const char* path) {
     }
   }
 }
-
 
 /**
  * loadBackground
@@ -219,7 +210,6 @@ static void ensureDir(const char* path) {
  *   - No cambia app->showBg; solo actualiza el recurso de imagen.
  */
 static bool loadBackground(App* app, const char* path) {
-  // Limpia lo previo
   if (app->imageTex) { SDL_DestroyTexture(app->imageTex); app->imageTex = NULL; }
   imageFree(&app->image);
 
@@ -233,7 +223,6 @@ static bool loadBackground(App* app, const char* path) {
     fprintf(stderr, "SDL_CreateTextureFromSurface: %s\n", SDL_GetError());
     return false;
   }
-  // printf("Fondo activo: %s\n", path);
   return true;
 }
 
@@ -257,7 +246,6 @@ static bool loadBackground(App* app, const char* path) {
  *   - Inicializa bgIndex=0 y carga ese fondo (loadBackground).
  */
 bool appSetBackgroundList(App* app, int count, const char* const* paths) {
-  // libera lista anterior
   if (app->bgPaths) {
     for (int i = 0; i < app->bgCount; ++i) free(app->bgPaths[i]);
     free(app->bgPaths);
@@ -276,7 +264,6 @@ bool appSetBackgroundList(App* app, int count, const char* const* paths) {
   }
   app->bgCount = count;
 
-  // carga inicial
   return loadBackground(app, app->bgPaths[app->bgIndex]);
 }
 
@@ -297,6 +284,7 @@ void appNextBackground(App* app) {
   app->bgIndex = (app->bgIndex + 1) % app->bgCount;
   (void)loadBackground(app, app->bgPaths[app->bgIndex]);
 }
+
 /**
  * appPrevBackground
  * -----------------
@@ -315,14 +303,12 @@ void appPrevBackground(App* app) {
   (void)loadBackground(app, app->bgPaths[app->bgIndex]);
 }
 
-
-
 /**
  * updateFpsTitle
  * --------------
  * Actualiza el titulo de la ventana con metricas de ejecucion.
  * Muestra:
- *   - FPS: promedio desde el arranque (frames / accTime)
+ *   - FPS: promedio desde el arranque (cacheado en app->fpsAvg)
  *   - it:  iteraciones de Lloyd
  *   - step: pixelStride de muestreo
  *   - gamma: exponente del peso (segun build)
@@ -335,26 +321,18 @@ void appPrevBackground(App* app) {
  *   - [INVERT] cuando el tema esta invertido (fondo claro / puntos oscuros)
  *
  * Notas:
- *   - La limitacion de frecuencia (throttling) se realiza en appRun().
- *   - Se usa snprintf para evitar desbordes.
+ *   - El throttling se hace en appRun() (cada ~0.25s).
  */
 static void updateFpsTitle(App *app)
 {
-  // FPS promedio desde el inicio (evitar division por cero)
-  double fps = (app->accTime > 0.0) ? (app->frames / app->accTime) : 0.0;
-
-  // Buffer temporal del titulo
   char title[160];
-
-  // Formateo del titulo con metricas y flags
   snprintf(title, sizeof(title),
            "%s — FPS: %.1f | it=%d step=%d gamma=%.2f | r=%d | minR=%.1f maxR=%.1f%s%s",
-           defaultTitle, fps, app->iters, app->pixelStride, app->gammaW,
+           defaultTitle, app->fpsAvg, app->iters, app->pixelStride, app->gammaW,
            app->dotRadius, app->minRadius, app->maxRadius,
            app->colorPoints ? " [COLOR]" : "",
            app->invertTheme ? " [INVERT]" : "");
 
-  // Aplicar a la ventana
   SDL_SetWindowTitle(app->win, title);
 }
 
@@ -378,24 +356,17 @@ static void updateFpsTitle(App *app)
  */
 static void sweepGammaTick(App *app)
 {
-  if (!app->sweepGamma)
-    return;
-  if (app->gEvery < 1)
-    app->gEvery = 1;
+  if (!app->sweepGamma) return;
+  if (app->gEvery < 1) app->gEvery = 1;
 
   if (app->iters > 0 && (app->iters % app->gEvery) == 0)
   {
     float next = app->gammaW + app->gStep;
-    if (app->gStep > 0.f)
-    {
+    if (app->gStep > 0.f) {
       app->gammaW = (next > app->gEnd) ? app->gEnd : next;
-    }
-    else if (app->gStep < 0.f)
-    {
+    } else if (app->gStep < 0.f) {
       app->gammaW = (next < app->gEnd) ? app->gEnd : next;
-    }
-    else
-    {
+    } else {
       // gStep == 0 -> no cambiar nada
     }
     updateFpsTitle(app);
@@ -423,14 +394,12 @@ static void sweepGammaTick(App *app)
  *         o la escritura del archivo.
  *
  * Notas:
- *   - Llamar al FINAL del frame (tras dibujar y antes/justo en el tick de
- *     SDL_RenderPresent) para capturar lo que se ve.
+ *   - Llamar al FINAL del frame (tras dibujar y antes de SDL_RenderPresent).
  *   - IMG_SavePNG devuelve 0 en exito.
  *   - SDL_RenderReadPixels puede ser costoso; usar para capturas puntuales.
  */
 static bool saveScreenshot(App *app)
 {
-  // Asegurar que exista "images/output"
   struct stat st;
   if (stat("images/output", &st) != 0)
   {
@@ -441,7 +410,6 @@ static bool saveScreenshot(App *app)
     }
   }
 
-  // Surface RGBA32 destino de la copia del backbuffer
   SDL_Surface *surf = SDL_CreateRGBSurfaceWithFormat(
       0, app->w, app->h, 32, SDL_PIXELFORMAT_RGBA32);
   if (!surf)
@@ -450,7 +418,6 @@ static bool saveScreenshot(App *app)
     return false;
   }
 
-  // Copiar pixeles del render target actual
   if (SDL_RenderReadPixels(app->ren, NULL, SDL_PIXELFORMAT_RGBA32,
                            surf->pixels, surf->pitch) != 0)
   {
@@ -459,11 +426,9 @@ static bool saveScreenshot(App *app)
     return false;
   }
 
-  // Nombre segun iteracion
   char path[256];
   snprintf(path, sizeof(path), "images/output/stipple_%05d.png", app->iters);
 
-  // Guardar PNG (0 = OK)
   if (IMG_SavePNG(surf, path) != 0)
   {
     fprintf(stderr, "IMG_SavePNG(%s): %s\n", path, IMG_GetError());
@@ -494,14 +459,6 @@ static bool saveScreenshot(App *app)
  * Return:
  *   true  en exito; false si falla alguna etapa (no quedan recursos colgados).
  *
- * Efectos/recursos:
- *   - SDL_Init(SDL_INIT_VIDEO|SDL_INIT_TIMER)
- *   - IMG_Init(PNG|JPG)
- *   - Crea SDL_Window/SDL_Renderer (vsync si disponible)
- *   - Carga y convierte imagen a RGBA32 (SDL_Surface) y crea SDL_Texture
- *   - Inicializa Stippling (nube de puntos)
- *   - Inicializa temporizador/FPS y ajustes visuales
- *
  * Variables de entorno (opcional):
  *   STIPPLE_AUTORUN=1           -> autoRun ON
  *   STIPPLE_MAX_ITERS=<N>       -> modo batch: salir al llegar a N iteraciones
@@ -510,26 +467,19 @@ static bool saveScreenshot(App *app)
  *   STIPPLE_GAMMA_END=<g1>      -> barrido: gamma objetivo (activa sweep)
  *   STIPPLE_GAMMA_STEP=<dg>     -> barrido: incremento por gEvery iteraciones
  *   STIPPLE_GAMMA_EVERY=<k>     -> barrido: aplicar cada k iteraciones (default=1)
- *
- * Notas:
- *   - SDL_HINT_RENDER_SCALE_QUALITY="2" solicita el mejor filtrado disponible.
- *   - En cada error se imprime a stderr y se limpia todo antes de retornar false.
- *   - Imprime en stdout el resumen de teclas disponibles al finalizar la init.
+ *   STIPPLE_BG_SECONDS=<s>      -> cambiar fondo automáticamente cada s segundos (>0 activa)
  */
 bool appInit(App **outApp, int width, int height, const char *title,
              const char *imagePath, int npoints)
 {
-  // Inicializar SDL (video + timer)
   if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER) != 0)
   {
     fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
     return false;
   }
 
-  // Pedir buen filtrado al escalar texturas (si el backend lo soporta)
   SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "2"); // "1" bilinear, "2" mejor disponible
 
-  // Reservar la estructura principal de la app
   App *app = (App *)calloc(1, sizeof(App));
   if (!app)
   {
@@ -537,7 +487,6 @@ bool appInit(App **outApp, int width, int height, const char *title,
     return false;
   }
 
-  // Dimensiones de ventana (fallback a defaults)
   app->w = (width > 0) ? width : defaultWidth;
   app->h = (height > 0) ? height : defaultHeight;
 
@@ -549,22 +498,22 @@ bool appInit(App **outApp, int width, int height, const char *title,
 
   app->seed = (unsigned)SDL_GetTicks();
 
-  app->colorPoints = true; // arranque en monocromo
+  app->colorPoints = true;  // arranca con color
   app->invertTheme = false; // fondo oscuro por defecto
   app->minRadius = 0.8f;    // ajustable en runtime
   app->maxRadius = 3.0f;
 
-  app->showBg = false;          // mostrar imagen de fondo
-  app->dotRadius = 2;          // radio de los puntos (solo visual)
+  app->showBg = false;         // mostrar imagen de fondo (toggle con 'B')
+  app->dotRadius = 2;          // radio visual de los puntos (solo render)
   app->wantScreenshot = false; // sin captura pendiente
 
   // Modo batch + logging (variables de entorno)
   app->maxIters = 0;
   app->metricsPath = NULL;
 
+  // Rotación automática de fondos
   app->bgTimer  = 0.0;
-  app->bgPeriod = 5.0;  // cada 20s (cámbialo a gusto o desactívalo)
-
+  app->bgPeriod = 20.0;  // cada 20s por defecto
   const char* env_bg = getenv("STIPPLE_BG_SECONDS");
   if (env_bg) {
     double v = atof(env_bg);
@@ -573,7 +522,7 @@ bool appInit(App **outApp, int width, int height, const char *title,
 
   const char *env_auto = getenv("STIPPLE_AUTORUN");   // "1" para auto
   const char *env_maxi = getenv("STIPPLE_MAX_ITERS"); // p.ej. "300"
-  const char *env_csv = getenv("STIPPLE_METRICS");    // ruta CSV
+  const char *env_csv  = getenv("STIPPLE_METRICS");   // ruta CSV
 
   // Barrido de gamma (opcional)
   app->sweepGamma = false;
@@ -582,73 +531,60 @@ bool appInit(App **outApp, int width, int height, const char *title,
   app->gEvery = 1;
 
   const char *env_gstart = getenv("STIPPLE_GAMMA_START"); // opcional
-  const char *env_gend = getenv("STIPPLE_GAMMA_END");     // requerido para activar
-  const char *env_gstep = getenv("STIPPLE_GAMMA_STEP");   // requerido para activar
+  const char *env_gend   = getenv("STIPPLE_GAMMA_END");   // requerido para activar
+  const char *env_gstep  = getenv("STIPPLE_GAMMA_STEP");  // requerido para activar
   const char *env_gevery = getenv("STIPPLE_GAMMA_EVERY"); // opcional, default=1
 
   if (env_gend && env_gstep)
   {
     app->sweepGamma = true;
-    app->gEnd = (float)atof(env_gend);
-    app->gStep = (float)atof(env_gstep);
+    app->gEnd   = (float)atof(env_gend);
+    app->gStep  = (float)atof(env_gstep);
     app->gEvery = (env_gevery && atoi(env_gevery) > 0) ? atoi(env_gevery) : 1;
 
-    if (env_gstart)
-    {
+    if (env_gstart) {
       app->gStart = (float)atof(env_gstart);
       app->gammaW = app->gStart; // arrancar desde START
-    }
-    else
-    {
+    } else {
       app->gStart = app->gammaW; // si no hay START, parte del gamma actual
     }
 
-    // Auto-run por conveniencia si no estaba activado
-    if (!app->autoRun)
-      app->autoRun = true;
+    if (!app->autoRun) app->autoRun = true;
   }
 
-  if (env_auto && *env_auto == '1')
-    app->autoRun = true;
-  if (env_maxi)
-  {
+  if (env_auto && *env_auto == '1') app->autoRun = true;
+  if (env_maxi) {
     int v = atoi(env_maxi);
-    if (v > 0)
-      app->maxIters = v;
+    if (v > 0) app->maxIters = v;
   }
-  if (env_csv && *env_csv)
-  {
+  if (env_csv && *env_csv) {
     app->metricsPath = strdup(env_csv); // se libera en appShutdown
   }
 
-  // Crear ventana y renderer acelerado con vsync
   app->win = SDL_CreateWindow(title ? title : defaultTitle,
                               SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                               app->w, app->h, 0);
   app->ren = SDL_CreateRenderer(app->win, -1,
                                 SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
 
-  // Validar creacion de ventana/renderer
   if (!app->win || !app->ren)
   {
     fprintf(stderr, "SDL_Create: %s\n", SDL_GetError());
-    if (app->ren)
-      SDL_DestroyRenderer(app->ren);
-    if (app->win)
-      SDL_DestroyWindow(app->win);
+    if (app->ren) SDL_DestroyRenderer(app->ren);
+    if (app->win) SDL_DestroyWindow(app->win);
     free(app);
     SDL_Quit();
     return false;
   }
 
-  // Inicializar contadores de tiempo/FPS
+  // Inicializar contadores de tiempo/FPS + cache UI
   app->freq = SDL_GetPerformanceFrequency();
   app->last = SDL_GetPerformanceCounter();
   app->accTime = 0.0;
   app->frames = 0;
-  app->lastFpsUpdate = 0.0;
+  app->fpsAvg = 0.0;
+  app->lastUiUpdate = 0.0;
 
-  // Inicializar SDL_image con soporte PNG y JPG
   int flags = IMG_INIT_PNG | IMG_INIT_JPG;
   if ((IMG_Init(flags) & flags) != flags)
   {
@@ -672,25 +608,8 @@ bool appInit(App **outApp, int width, int height, const char *title,
     const char* one[] = { imagePath };
     appSetBackgroundList(app, 1, one);
   } else {
-    // Usa lista por defecto de config.h
-    // cuenta elementos hasta NULL
     appSetBackgroundList(app, defaultBgCount, defaultBgPaths);
   }
-
-
-  // Cargar imagen base y crear textura (opcional si la carga falla)
-  // const char *path = (imagePath && *imagePath) ? imagePath : defaultImagePath;
-  // if (!imageLoad(&app->image, path))
-  // {
-  //   fprintf(stderr, "No se pudo cargar %s, continuo sin imagen.\n", path);
-  //   app->imageTex = NULL; // seguimos, el fondo es opcional
-  // }
-  // else
-  // {
-  //   app->imageTex = SDL_CreateTextureFromSurface(app->ren, app->image.surface);
-  //   if (!app->imageTex)
-  //     fprintf(stderr, "SDL_CreateTextureFromSurface: %s\n", SDL_GetError());
-  // }
 
   // Estado de la nube de puntos (stippling)
   int n0 = (npoints > 0) ? npoints : defaultNPoints;
@@ -711,7 +630,6 @@ bool appInit(App **outApp, int width, int height, const char *title,
 
   app->fpsTex = NULL;
   app->fpsTexW = app->fpsTexH = 0;
-  app->lastFpsOverlayUpdate = 0.0;
 
   // Ayuda rapida en consola
   printf("[SPACE] paso Lloyd | [A] auto | [-]/[+] step | [G]/[H] gamma | [B] fondo | "
@@ -719,7 +637,6 @@ bool appInit(App **outApp, int width, int height, const char *title,
          "[C] color ON/OFF | [I] tema | [N]/[M] minR -/+ | [,]/[.] maxR -/+\n");
   fflush(stdout);
 
-  // Entregar la instancia al caller
   *outApp = app;
   return true;
 }
@@ -753,14 +670,11 @@ bool appInit(App **outApp, int width, int height, const char *title,
  *   , / .     -> maxRadius -/+
  *
  * Detalles:
- *   - El titulo de la ventana se actualiza ~cada 0.25 s con FPS/estado.
- *   - `pixelStride` controla granularidad de muestreo; gamma > 1 enfatiza sombras.
- *   - Requiere `app != NULL`. Ejecutar en el hilo principal (SDL).
+ *   - Se actualiza título y overlay cada ~0.25 s, no en cada frame.
  */
 void appRun(App *app)
 {
-  if (!app)
-    return;
+  if (!app) return;
 
   bool running = true;
 
@@ -779,14 +693,8 @@ void appRun(App *app)
       if (e.type == SDL_KEYDOWN)
       {
         SDL_Keycode sym = e.key.keysym.sym;
-        // SDL_Scancode sc = e.key.keysym.scancode;
-        // Uint16      mods = e.key.keysym.mod;
 
-        // Salir
-        if (sym == SDLK_ESCAPE)
-        {
-          running = false;
-        }
+        if (sym == SDLK_ESCAPE) running = false;
 
         // Paso manual de Lloyd (con timing + CSV opcional)
         if (sym == SDLK_SPACE)
@@ -800,7 +708,6 @@ void appRun(App *app)
           {
             app->iters++;
 
-            // Log a CSV si está habilitado
             if (app->metricsPath)
             {
               double ms = util_ns_to_ms(t1 - t0);
@@ -810,7 +717,6 @@ void appRun(App *app)
                               app->iters, ms, app->pixelStride, app->gammaW, app->stip.count);
             }
 
-            // Salir si alcanzó tope de iteraciones en modo batch
             if (app->maxIters > 0 && app->iters >= app->maxIters)
               running = false;
 
@@ -823,59 +729,35 @@ void appRun(App *app)
         {
           app->autoRun = !app->autoRun;
           sweepGammaTick(app);
-          updateFpsTitle(app); // feedback inmediato en el titulo
+          updateFpsTitle(app); // feedback inmediato
         }
 
         // Granularidad de muestreo: step-- / step++
         if (sym == SDLK_MINUS || sym == SDLK_KP_MINUS)
         {
-          if (app->pixelStride > 1)
-            app->pixelStride--;
+          if (app->pixelStride > 1) app->pixelStride--;
           updateFpsTitle(app);
         }
         if (sym == SDLK_PLUS || sym == SDLK_KP_PLUS || sym == SDLK_EQUALS)
         {
-          if (app->pixelStride < 64)
-            app->pixelStride++;
+          if (app->pixelStride < 64) app->pixelStride++;
           updateFpsTitle(app);
         }
 
         // Gamma (peso de oscuridad)
-        if (sym == SDLK_g)
-        {
-          app->gammaW *= 1.10f;
-          updateFpsTitle(app);
-        }
-        if (sym == SDLK_h)
-        {
-          app->gammaW /= 1.10f;
-          updateFpsTitle(app);
-        }
+        if (sym == SDLK_g) { app->gammaW *= 1.10f; updateFpsTitle(app); }
+        if (sym == SDLK_h) { app->gammaW /= 1.10f; updateFpsTitle(app); }
 
         // Fondo ON/OFF (imagen de referencia)
-        if (sym == SDLK_b)
-        {
-          app->showBg = !app->showBg;
-          updateFpsTitle(app);
-        }
+        if (sym == SDLK_b) { app->showBg = !app->showBg; updateFpsTitle(app); }
 
-        // Radio visual de puntos (solo render, no afecta simulacion)
-        if (sym == SDLK_z)
-        {
-          if (app->dotRadius > 1)
-            app->dotRadius--;
-          updateFpsTitle(app);
-        }
-        if (sym == SDLK_x)
-        {
-          if (app->dotRadius < 20)
-            app->dotRadius++;
-          updateFpsTitle(app);
-        }
+        // Radio visual de puntos (solo render)
+        if (sym == SDLK_z) { if (app->dotRadius > 1)  app->dotRadius--; updateFpsTitle(app); }
+        if (sym == SDLK_x) { if (app->dotRadius < 20) app->dotRadius++; updateFpsTitle(app); }
 
-        // Siguiente fondo: ]
+        // Siguiente fondo: 'o'
         if (sym == SDLK_o) {
-          int n = app->stip.count;
+          int n = app->stip.count; // conservar N actual
           stipplingFree(&app->stip);
           stipplingInit(&app->stip, n, app->w, app->h, ++app->seed);
           app->iters = 0;
@@ -883,17 +765,14 @@ void appRun(App *app)
           updateFpsTitle(app);
         }
 
-        // Fondo anterior: [
+        // Fondo anterior: 'u'
         if (sym == SDLK_u) {
           appPrevBackground(app);
           updateFpsTitle(app);
         }
 
         // Captura: marcar para el final del frame actual
-        if (sym == SDLK_p)
-        {
-          app->wantScreenshot = true;
-        }
+        if (sym == SDLK_p) app->wantScreenshot = true;
 
         // Re-seed: reinicia nube de puntos con nueva semilla (misma N)
         if (sym == SDLK_r)
@@ -906,50 +785,37 @@ void appRun(App *app)
         }
 
         // Color ON/OFF (C)
-        if (sym == SDLK_c)
-        {
-          app->colorPoints = !app->colorPoints;
-          updateFpsTitle(app);
-        }
+        if (sym == SDLK_c) { app->colorPoints = !app->colorPoints; updateFpsTitle(app); }
 
         // Invertir tema (I)
-        if (sym == SDLK_i)
-        {
-          app->invertTheme = !app->invertTheme;
-          updateFpsTitle(app);
-        }
+        if (sym == SDLK_i) { app->invertTheme = !app->invertTheme; updateFpsTitle(app); }
 
         // Min radius (N/M)
         if (sym == SDLK_n)
         {
           app->minRadius -= 0.1f;
-          if (app->minRadius < 0.5f)
-            app->minRadius = 0.5f;
-          if (app->minRadius > app->maxRadius)
-            app->minRadius = app->maxRadius;
+          if (app->minRadius < 0.5f) app->minRadius = 0.5f;
+          if (app->minRadius > app->maxRadius) app->minRadius = app->maxRadius;
           updateFpsTitle(app);
         }
         if (sym == SDLK_m)
         {
           app->minRadius += 0.1f;
-          if (app->minRadius > app->maxRadius)
-            app->minRadius = app->maxRadius;
+          if (app->minRadius > app->maxRadius) app->minRadius = app->maxRadius;
           updateFpsTitle(app);
         }
 
         // Max radius (, .)
         if (sym == SDLK_COMMA)
-        { // ','
+        {
           app->maxRadius -= 0.1f;
-          if (app->maxRadius < app->minRadius)
-            app->maxRadius = app->minRadius;
+          if (app->maxRadius < app->minRadius) app->maxRadius = app->minRadius;
           updateFpsTitle(app);
         }
         if (sym == SDLK_PERIOD)
-        { // '.'
+        {
           app->maxRadius += 0.1f;
-          if (app->maxRadius > 20.f)
-            app->maxRadius = 20.f;
+          if (app->maxRadius > 20.f) app->maxRadius = 20.f;
           updateFpsTitle(app);
         }
       }
@@ -962,15 +828,13 @@ void appRun(App *app)
     app->accTime += dt;
     app->frames++;
 
+    // Rotación automática de fondo + reseed
     if (app->bgPeriod > 0.0) {
       app->bgTimer += dt;
       if (app->bgTimer >= app->bgPeriod) {
         app->bgTimer = 0.0;
-
-        // siguiente imagen
         appNextBackground(app);
 
-        // reseed de puntos con nueva semilla
         int n = app->stip.count;
         stipplingFree(&app->stip);
         stipplingInit(&app->stip, n, app->w, app->h, ++app->seed);
@@ -980,7 +844,7 @@ void appRun(App *app)
       }
     }
 
-    // Modo automatico: avanza Lloyd cada frame (con timing + CSV opcional)
+    // Modo automático: un paso de Lloyd por frame
     if (app->autoRun)
     {
       uint64_t t0 = util_now_ns();
@@ -1008,26 +872,25 @@ void appRun(App *app)
       }
     }
 
-    // Refrescar titulo de ventana cada ~0.25 s
-    if (app->accTime - app->lastFpsUpdate >= 0.25)
+    // Refrescar título y overlay cada ~0.25 s
+    if (app->accTime - app->lastUiUpdate >= 0.25)
     {
+      app->fpsAvg = (app->accTime > 0.0) ? (app->frames / app->accTime) : 0.0;
       updateFpsTitle(app);
-      app->lastFpsUpdate = app->accTime;
+      refreshFpsOverlay(app);
+      app->lastUiUpdate = app->accTime;
     }
 
     // 3) RENDER
-    SDL_SetRenderDrawColor(app->ren, 12, 16, 28, 255); // fondo solido cuando no hay imagen
-    SDL_RenderClear(app->ren);
-
-    // Fondo (imagen), si esta habilitado
     if (app->showBg && app->imageTex)
     {
+      // La imagen de fondo cubre la ventana completa
       SDL_Rect dst = {0, 0, app->w, app->h};
       SDL_RenderCopy(app->ren, app->imageTex, NULL, &dst);
     }
     else
     {
-      // fondo sólido según tema
+      // fondo sólido según tema (un solo clear)
       if (app->invertTheme)
         SDL_SetRenderDrawColor(app->ren, 245, 245, 245, 255);
       else
@@ -1048,12 +911,7 @@ void appRun(App *app)
       app->wantScreenshot = false;
     }
 
-    if (app->accTime - app->lastFpsOverlayUpdate >= 0.25) {
-      refreshFpsOverlay(app);
-      app->lastFpsOverlayUpdate = app->accTime;
-    }
-
-    // dibuja el overlay
+    // Overlay
     drawFpsOverlay(app);
 
     SDL_RenderPresent(app->ren);
@@ -1069,62 +927,35 @@ void appRun(App *app)
  *   Deja el proceso en un estado limpio después de usar `App`. Es segura ante
  *   inicializaciones parciales (p. ej., si `appInit` falló a mitad) y ante
  *   punteros NULL internos.
- *
- * Orden de liberación:
- *   1) Recursos propios de la app (nube de puntos).
- *   2) Recursos gráficos dependientes (textura, imagen/surface, renderer, ventana).
- *   3) Subsistemas globales (IMG_Quit, SDL_Quit).
- *
- * Reglas/garantías:
- *   - No-op si `app == NULL`.
- *   - Idempotente a nivel de punteros internos (chequea NULL antes de destruir).
- *   - Puede llamarse tras un `appInit` fallido sin filtrar.
- *   - Tras retornar, cualquier puntero dentro de `App` es inválido.
- *
- * Parámetros:
- *   app -> instancia a destruir (propiedad transferida; se libera internamente).
- *
- * Retorno:
- *   (void) Sin valor. Efectos colaterales: cierre de subsistemas y liberación de memoria.
  */
 void appShutdown(App *app)
 {
-  if (!app)
-    return;
+  if (!app) return;
 
   // 1) Recursos propios
   stipplingFree(&app->stip); // nube de puntos
 
   // 2) Gráficos
-  if (app->imageTex)
-    SDL_DestroyTexture(app->imageTex);
+  if (app->fpsTex) SDL_DestroyTexture(app->fpsTex);
+  if (app->imageTex) SDL_DestroyTexture(app->imageTex);
+  imageFree(&app->image); // liberar surface + metadatos
 
   // Métricas (si se usó logging a CSV)
-  if (app->metricsPath)
-    free(app->metricsPath);
+  if (app->metricsPath) free(app->metricsPath);
 
-  // imageFree(&app->image); // surface + metadatos
+  if (app->ren) SDL_DestroyRenderer(app->ren);
+  if (app->win) SDL_DestroyWindow(app->win);
 
-  if (app->ren)
-    SDL_DestroyRenderer(app->ren);
+  if (app->font) TTF_CloseFont(app->font);
+  TTF_Quit();
 
-  if (app->win)
-    SDL_DestroyWindow(app->win);
-
-  // 3) Subsistemas globales
   IMG_Quit();
   SDL_Quit();
-
-  if (app->fpsTex) SDL_DestroyTexture(app->fpsTex);
-  if (app->font)   TTF_CloseFont(app->font);
-  TTF_Quit();
 
   if (app->bgPaths) {
     for (int i = 0; i < app->bgCount; ++i) free(app->bgPaths[i]);
     free(app->bgPaths);
   }
 
-
-  // Estructura principal
   free(app);
 }

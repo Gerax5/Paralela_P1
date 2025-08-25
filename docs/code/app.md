@@ -2,7 +2,7 @@
 
 ## Resumen
 
-`app.c` orquesta la aplicación gráfica *Voronoi Stippling*. Se encarga de:
+`app.c` orquesta la aplicación gráfica _Voronoi Stippling_. Se encarga de:
 
 - Inicializar/cerrar SDL y SDL_image.
 - Crear ventana, renderer y recursos de imagen.
@@ -66,6 +66,21 @@ struct App {
   bool  sweepGamma;
   float gStart, gEnd, gStep;
   int   gEvery;        // aplicar cada N iteraciones
+
+  // --- Overlay FPS
+  TTF_Font    *font;         // fuente para texto
+  SDL_Texture *fpsTex;       // textura cacheada del texto "FPS: ... "
+  int          fpsTexW;
+  int          fpsTexH;
+  double       lastFpsOverlayUpdate; // última vez que refrescamos el texto
+
+  // --- Lista de fondos
+  char  **bgPaths;
+  int     bgCount;
+  int     bgIndex;
+
+  double bgTimer;    // segundos acumulados desde el último cambio
+  double bgPeriod;   // cada cuántos segundos cambiar de imagen (>0 activa)
 };
 ```
 
@@ -73,7 +88,7 @@ struct App {
 
 - Los recursos viven entre `appInit` y `appShutdown`.
 - `minRadius/maxRadius`, `colorPoints`, `invertTheme` afectan el render “estilizado”.
-- `metricsPath`, `maxIters` y el *sweep* de gamma permiten ejecuciones batch con logging.
+- `metricsPath`, `maxIters` y el _sweep_ de gamma permiten ejecuciones batch con logging.
 
 ## Inicialización — `appInit`
 
@@ -106,9 +121,16 @@ Hace:
 ## Capturas — `saveScreenshot`
 
 - Asegura `images/output/`.
-- Copia el *framebuffer* a un `SDL_Surface` RGBA32 y guarda `PNG`.
+- Copia el _framebuffer_ a un `SDL_Surface` RGBA32 y guarda `PNG`.
 - Nombre: `images/output/stipple_XXXXX.png` (`XXXXX = iters`).
 - Debe llamarse al final del frame para capturar lo que se ve.
+
+## Fondos rotables
+
+- `appSetBackgroundList`
+  - Copia y guarda la lista y carga el primer fondo
+- `appNextBackground`, `appPrevBackground`
+  - Avanza/retrocede circularmente y carga el fondo.
 
 ## Bucle principal — `appRun`
 
@@ -116,40 +138,41 @@ Hace:
 
 1. **Entrada**
 
-    - `SDL_PollEvent`: `SDL_QUIT` y `SDL_KEYDOWN`.
-    - **Atajos de teclado:**
-      - `ESC`  -> salir.
-      - `SPACE` -> 1 paso de Lloyd (con timing + CSV si activo).
-      - `A` -> auto ON/OFF.
-      - `-` / `+` (incluye keypad y `=`) -> `pixelStride` down/up.
-      - `G` / `H` -> `gammaW` up/down.
-      - `B` -> alterna `showBg`.
-      - `Z` / `X` -> `dotRadius` down/up.
-      - `R` -> reseed con nueva `seed`.
-      - `P` -> marcar captura del frame.
-      - `C` -> alterna `colorPoints` (color real de la imagen).
-      - `I` -> alterna `invertTheme` (tema claro/oscuro).
-      - `N` / `M` -> `minRadius` -/+ (clamp `[0.5, maxRadius]`).
-      - `,` / `.` -> `maxRadius` -/+ (clamp `[minRadius, 20]`).
+   - `SDL_PollEvent`: `SDL_QUIT` y `SDL_KEYDOWN`.
+   - **Atajos de teclado:**
+     - `ESC` -> salir.
+     - `SPACE` -> 1 paso de Lloyd (con timing + CSV si activo).
+     - `A` -> auto ON/OFF.
+     - `-` / `+` (incluye keypad y `=`) -> `pixelStride` down/up.
+     - `G` / `H` -> `gammaW` up/down.
+     - `B` -> alterna `showBg`.
+     - `Z` / `X` -> `dotRadius` down/up.
+     - `R` -> reseed con nueva `seed`.
+     - `P` -> marcar captura del frame.
+     - `C` -> alterna `colorPoints` (color real de la imagen).
+     - `I` -> alterna `invertTheme` (tema claro/oscuro).
+     - `N` / `M` -> `minRadius` -/+ (clamp `[0.5, maxRadius]`).
+     - `,` / `.` -> `maxRadius` -/+ (clamp `[minRadius, 20]`).
 
 2. **Simulación:**
 
-    - Calcula `dt`, acumula `accTime` y `frames`.
-    - Si `autoRun`, ejecuta `lloydStep` (mide tiempo, loguea si `metricsPath`).
-    - Aplica sweep de gamma si está activo (cada `gEvery` iters).
+   - Calcula `dt`, acumula `accTime` y `frames`.
+   - Si `autoRun`, ejecuta `lloydStep` (mide tiempo, loguea si `metricsPath`).
+   - Aplica sweep de gamma si está activo (cada `gEvery` iters).
 
 3. **Render:**
 
-    - Fondo sólido o imagen (según `showBg` e `imageTex`), respetando `invertTheme`.
-    - Dibuja puntos con `stipplingRenderStyled(...)` usando:
+   - Fondo sólido o imagen (según `showBg` e `imageTex`), respetando `invertTheme`.
+   - Dibuja puntos con `stipplingRenderStyled(...)` usando:
 
-      - `minRadius/maxRadius`, `colorPoints`, `invertTheme`, y brillo local de la imagen.
-    - Si `wantScreenshot`, guarda PNG y limpia el flag.
-    - `SDL_RenderPresent()`.
+     - `minRadius/maxRadius`, `colorPoints`, `invertTheme`, y brillo local de la imagen.
+
+   - Si `wantScreenshot`, guarda PNG y limpia el flag.
+   - `SDL_RenderPresent()`.
 
 **Notas:**
 
-- `lloydStep` usa muestreo bilineal UV y *UniformGrid* para *nearest neighbor*.
+- `lloydStep` usa muestreo bilineal UV y _UniformGrid_ para _nearest neighbor_.
 - `pixelStride` balancea costo/calidad (3–4 suele ir bien).
 
 ## Cierre — `appShutdown`
@@ -167,7 +190,7 @@ Idempotente a nivel de punteros internos; no-op si `app == NULL`.
 
 - `image.c`: carga y muestreo (luminancia/ RGB bilineal).
 - `lloyd.c`: paso de Lloyd con ponderación por oscuridad y reseed de huérfanos.
-- `voronoi.c`: *UniformGrid* para acelerar NN.
+- `voronoi.c`: _UniformGrid_ para acelerar NN.
 - `stippling.c`: estado y render (incluye versión “estilizada” por brillo/color).
 
 ## Parámetros clave en runtime
