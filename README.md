@@ -55,6 +55,7 @@ make run
 - `Z` / `X` → radio de punto -/+
 - `R` → resembrar puntos (misma N, nueva semilla)
 - `P` → guardar screenshot PNG del frame actual (en `images/output/`)
+- `U` / `O` → anterior/siguiente `fondo`
 - `ESC` → salir
 
 **Salidas:**
