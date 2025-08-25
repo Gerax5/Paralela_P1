@@ -72,3 +72,23 @@
 #ifndef STIPPLE_WEIGHT_BY_BRIGHTNESS
 #define STIPPLE_WEIGHT_BY_BRIGHTNESS 1
 #endif
+
+
+/*
+ * Lista de fondos por defecto
+ * ---------------------------
+ * Se usa si no se pasa imagePath en appInit/main. La aplicación recorrerá
+ * estas rutas circularmente con O/U y, si STIPPLE_BG_SECONDS > 0, también
+ * de forma automática cada s segundos (además resemilla la nube de puntos).
+ *
+ * Notas:
+ *  - Puedes añadir/quitar rutas aquí.
+ */
+static const char* const defaultBgPaths[] = {
+  "images/input/twitch.png",
+  "images/input/wh.png",
+  "images/input/plankton.jpg"
+};
+
+/* Lista de imagenes a desplegar. */
+#define defaultBgCount ((int)(sizeof(defaultBgPaths)/sizeof(defaultBgPaths[0])))

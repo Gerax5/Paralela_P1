@@ -83,3 +83,42 @@ void appRun(App *app);
  *   - Cierra SDL_image y SDL.
  */
 void appShutdown(App *app);
+
+/**
+ * appSetBackgroundList
+ * --------------------
+ * Define la lista de imagenes de fondo que usara la aplicacion (y carga la primera).
+ *
+ * Params:
+ *   app    -> instancia valida de App.
+ *   count  -> cantidad de rutas en 'paths' (debe ser > 0).
+ *   paths  -> arreglo de 'count' punteros a cadenas C terminadas en '\0'.
+ *             Las cadenas se copian internamente; el caller conserva su propiedad.
+ *             Firma: const char* const* para permitir pasar arreglos de literales.
+ *
+ * Return:
+ *   true si se cargo correctamente la primera imagen; false en error.
+ *
+ * Notas:
+ *   - Reemplaza cualquier lista previa y libera su memoria.
+ *   - Tras el set, la imagen en indice 0 queda activa.
+ *   - Esta lista se recorre circularmente con appNextBackground/appPrevBackground
+ *     y por la rotacion automatica (si esta activada).
+ */
+bool appSetBackgroundList(App* app, int count, const char* const* paths);
+
+/**
+ * appNextBackground
+ * -----------------
+ * Avanza al siguiente fondo de la lista (recorrido circular) y lo carga.
+ * No hace nada si no hay lista cargada.
+ */
+void appNextBackground(App* app);
+
+/**
+ * appPrevBackground
+ * -----------------
+ * Retrocede al fondo anterior de la lista (recorrido circular) y lo carga.
+ * No hace nada si no hay lista cargada.
+ */
+void appPrevBackground(App* app);

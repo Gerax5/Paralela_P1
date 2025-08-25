@@ -90,7 +90,7 @@ int main(int argc, char **argv)
 
   // Mensaje de arranque con los parametros efectivos
   fprintf(stdout, "Inicializando con N=%d  Imagen=%s\n",
-          npoints, imgPath ? imgPath : defaultImagePath);
+          npoints, imgPath);
 
   // Inicializacion de la aplicacion (SDL, imagen, puntos, etc.)
   App *app = NULL;

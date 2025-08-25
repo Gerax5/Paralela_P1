@@ -12,6 +12,10 @@
 #include "stippling.h"
 #include "lloyd.h"
 #include "utils.h"
+#include <SDL2/SDL_ttf.h>
+#include <sys/stat.h>
+#include <errno.h>
+
 
 /*
  * App
@@ -69,7 +73,249 @@ struct App
   bool sweepGamma;           // ON: barrido de gamma automatico
   float gStart, gEnd, gStep; // rango e incremento de gamma
   int gEvery;                // aplicar incremento cada N iteraciones
+  // --- Overlay FPS
+  TTF_Font    *font;         // fuente para texto
+  SDL_Texture *fpsTex;       // textura cacheada del texto "FPS: ... "
+  int          fpsTexW;
+  int          fpsTexH;
+  double       lastFpsOverlayUpdate; // última vez que refrescamos el texto
+
+  // --- Lista de fondos
+  char  **bgPaths;
+  int     bgCount;
+  int     bgIndex;
+
+  double bgTimer;    // segundos acumulados desde el último cambio
+  double bgPeriod;   // cada cuántos segundos cambiar de imagen (>0 activa)
 };
+
+/**
+ * refreshFpsOverlay
+ * -----------------
+ * Regenera la textura de texto del overlay de FPS/estado.
+ *
+ * Flujo:
+ *   1) Construye el string con FPS, iters, step y gamma.
+ *   2) Renderiza texto con TTF_RenderText_Blended (color según tema).
+ *   3) Crea SDL_Texture desde el surface y cachea en app->fpsTex (+ ancho/alto).
+ *   4) Libera la textura previa si existía.
+ *
+ * Params:
+ *   app -> contexto con renderer, fuente y estado (no NULL).
+ *
+ * Notas:
+ *   - Se invoca cada ~0.25s desde appRun() para evitar costo por frame.
+ *   - Si no hay fuente (app->font == NULL) no hace nada.
+ */
+
+static void refreshFpsOverlay(App *app) {
+  if (!app->font) return;
+
+  // FPS promedio desde el inicio (igual que en el título)
+  double fps = (app->accTime > 0.0) ? (app->frames / app->accTime) : 0.0;
+
+  char buf[96];
+  snprintf(buf, sizeof(buf), "FPS: %.1f | it=%d | step=%d | gamma=%.2f",
+           fps, app->iters, app->pixelStride, app->gammaW);
+
+  SDL_Color color = app->invertTheme
+                      ? (SDL_Color){ 10, 10, 10, 255 }
+                      : (SDL_Color){ 240, 240, 240, 255 };
+
+  SDL_Surface *surf = TTF_RenderText_Blended(app->font, buf, color);
+  if (!surf) {
+    fprintf(stderr, "TTF_RenderText_Blended: %s\n", TTF_GetError());
+    return;
+  }
+
+  SDL_Texture *tex = SDL_CreateTextureFromSurface(app->ren, surf);
+  if (!tex) {
+    fprintf(stderr, "SDL_CreateTextureFromSurface: %s\n", SDL_GetError());
+    SDL_FreeSurface(surf);
+    return;
+  }
+
+  // Limpia textura anterior
+  if (app->fpsTex) SDL_DestroyTexture(app->fpsTex);
+
+  app->fpsTex  = tex;
+  app->fpsTexW = surf->w;
+  app->fpsTexH = surf->h;
+
+  SDL_FreeSurface(surf);
+}
+
+/**
+ * drawFpsOverlay
+ * --------------
+ * Dibuja un recuadro semitransparente y encima el texto cacheado de FPS.
+ *
+ * Params:
+ *   app -> contexto con renderer y app->fpsTex válido (opcional).
+ *
+ * Notas:
+ *   - No re-renderiza el texto; solo usa la textura ya generada.
+ *   - Coordenadas fijas (x=10,y=10) con padding para mejorar legibilidad.
+ *   - Requiere SDL_BLENDMODE_BLEND para el rect de fondo.
+ */
+static void drawFpsOverlay(App *app) {
+  if (!app->fpsTex) return;
+
+  const int pad = 6;
+  const int x   = 10;
+  const int y   = 10;
+
+  SDL_SetRenderDrawBlendMode(app->ren, SDL_BLENDMODE_BLEND);
+  SDL_Color bg = app->invertTheme
+                   ? (SDL_Color){ 255, 255, 255, 160 }
+                   : (SDL_Color){ 0, 0, 0, 160 };
+
+  SDL_SetRenderDrawColor(app->ren, bg.r, bg.g, bg.b, bg.a);
+  SDL_Rect box = { x - pad, y - pad, app->fpsTexW + pad*2, app->fpsTexH + pad*2 };
+  SDL_RenderFillRect(app->ren, &box);
+
+  SDL_Rect dst = { x, y, app->fpsTexW, app->fpsTexH };
+  SDL_RenderCopy(app->ren, app->fpsTex, NULL, &dst);
+}
+
+/**
+ * ensureDir
+ * ---------
+ * Crea un directorio si no existe.
+ *
+ * Params:
+ *   path -> ruta del directorio (p.ej. "images/output").
+ *
+ * Notas:
+ *   - Usa stat(...) y mkdir(..., 0755).
+ *   - Ignora errno == EEXIST para ser idempotente.
+ */
+static void ensureDir(const char* path) {
+  struct stat st;
+  if (stat(path, &st) != 0) {
+    if (mkdir(path, 0755) != 0 && errno != EEXIST) {
+      perror("mkdir");
+    }
+  }
+}
+
+
+/**
+ * loadBackground
+ * --------------
+ * Carga una imagen desde disco, la convierte a SDL_Surface RGBA32 (via Image)
+ * y crea una SDL_Texture asociada para usar como fondo.
+ *
+ * Params:
+ *   app  -> contexto con renderer y estado. Se limpia image/texture previos.
+ *   path -> ruta a PNG/JPG válido.
+ *
+ * Return:
+ *   true  en éxito (app->imageTex listo para render),
+ *   false en error (se loguea motivo).
+ *
+ * Notas:
+ *   - Libera la textura anterior y el Image previo antes de cargar.
+ *   - No cambia app->showBg; solo actualiza el recurso de imagen.
+ */
+static bool loadBackground(App* app, const char* path) {
+  // Limpia lo previo
+  if (app->imageTex) { SDL_DestroyTexture(app->imageTex); app->imageTex = NULL; }
+  imageFree(&app->image);
+
+  if (!imageLoad(&app->image, path)) {
+    fprintf(stderr, "No se pudo cargar fondo: %s\n", path);
+    return false;
+  }
+
+  app->imageTex = SDL_CreateTextureFromSurface(app->ren, app->image.surface);
+  if (!app->imageTex) {
+    fprintf(stderr, "SDL_CreateTextureFromSurface: %s\n", SDL_GetError());
+    return false;
+  }
+  // printf("Fondo activo: %s\n", path);
+  return true;
+}
+
+/**
+ * appSetBackgroundList
+ * --------------------
+ * Define/actualiza la lista de rutas de fondos rotables y carga el primero.
+ *
+ * Params:
+ *   app   -> contexto (no NULL).
+ *   count -> cantidad de rutas en 'paths' (debe ser > 0).
+ *   paths -> arreglo de C-strings con rutas válidas a imágenes.
+ *
+ * Return:
+ *   true  si pudo copiar la lista y cargar el primer fondo,
+ *   false si count<=0, paths==NULL o falla memoria/carga.
+ *
+ * Efectos:
+ *   - Libera la lista anterior (si existía).
+ *   - Duplica cada string (propiedad pasa a App).
+ *   - Inicializa bgIndex=0 y carga ese fondo (loadBackground).
+ */
+bool appSetBackgroundList(App* app, int count, const char* const* paths) {
+  // libera lista anterior
+  if (app->bgPaths) {
+    for (int i = 0; i < app->bgCount; ++i) free(app->bgPaths[i]);
+    free(app->bgPaths);
+    app->bgPaths = NULL;
+  }
+  app->bgCount = 0;
+  app->bgIndex = 0;
+
+  if (count <= 0 || !paths) return false;
+
+  app->bgPaths = (char**)calloc(count, sizeof(char*));
+  if (!app->bgPaths) return false;
+
+  for (int i = 0; i < count; ++i) {
+    app->bgPaths[i] = strdup(paths[i]);
+  }
+  app->bgCount = count;
+
+  // carga inicial
+  return loadBackground(app, app->bgPaths[app->bgIndex]);
+}
+
+/**
+ * appNextBackground
+ * -----------------
+ * Avanza al siguiente fondo en la lista circular y lo carga.
+ *
+ * Params:
+ *   app -> contexto con lista de fondos ya establecida.
+ *
+ * Notas:
+ *   - No hace reseed de puntos ni cambia flags visuales.
+ *   - No hace nada si bgCount <= 0.
+ */
+void appNextBackground(App* app) {
+  if (app->bgCount <= 0) return;
+  app->bgIndex = (app->bgIndex + 1) % app->bgCount;
+  (void)loadBackground(app, app->bgPaths[app->bgIndex]);
+}
+/**
+ * appPrevBackground
+ * -----------------
+ * Retrocede al fondo anterior en la lista circular y lo carga.
+ *
+ * Params:
+ *   app -> contexto con lista de fondos ya establecida.
+ *
+ * Notas:
+ *   - No hace reseed de puntos ni cambia flags visuales.
+ *   - No hace nada si bgCount <= 0.
+ */
+void appPrevBackground(App* app) {
+  if (app->bgCount <= 0) return;
+  app->bgIndex = (app->bgIndex - 1 + app->bgCount) % app->bgCount;
+  (void)loadBackground(app, app->bgPaths[app->bgIndex]);
+}
+
+
 
 /**
  * updateFpsTitle
@@ -296,24 +542,34 @@ bool appInit(App **outApp, int width, int height, const char *title,
   app->h = (height > 0) ? height : defaultHeight;
 
   // Defaults de ejecución/visualización
-  app->autoRun = false;
+  app->autoRun = true;
   app->iters = 0;
   app->pixelStride = defaultLloydStep;
   app->gammaW = defaultGamma;
-  app->seed = 42u;
 
-  app->colorPoints = false; // arranque en monocromo
+  app->seed = (unsigned)SDL_GetTicks();
+
+  app->colorPoints = true; // arranque en monocromo
   app->invertTheme = false; // fondo oscuro por defecto
   app->minRadius = 0.8f;    // ajustable en runtime
   app->maxRadius = 3.0f;
 
-  app->showBg = true;          // mostrar imagen de fondo
+  app->showBg = false;          // mostrar imagen de fondo
   app->dotRadius = 2;          // radio de los puntos (solo visual)
   app->wantScreenshot = false; // sin captura pendiente
 
   // Modo batch + logging (variables de entorno)
   app->maxIters = 0;
   app->metricsPath = NULL;
+
+  app->bgTimer  = 0.0;
+  app->bgPeriod = 5.0;  // cada 20s (cámbialo a gusto o desactívalo)
+
+  const char* env_bg = getenv("STIPPLE_BG_SECONDS");
+  if (env_bg) {
+    double v = atof(env_bg);
+    if (v > 0.0) app->bgPeriod = v;
+  }
 
   const char *env_auto = getenv("STIPPLE_AUTORUN");   // "1" para auto
   const char *env_maxi = getenv("STIPPLE_MAX_ITERS"); // p.ej. "300"
@@ -404,27 +660,58 @@ bool appInit(App **outApp, int width, int height, const char *title,
     return false;
   }
 
+  ensureDir("images");
+  ensureDir("images/input");
+  ensureDir("images/output");
+
+  app->bgPaths  = NULL;
+  app->bgCount  = 0;
+  app->bgIndex  = 0;
+
+  if (imagePath && *imagePath) {
+    const char* one[] = { imagePath };
+    appSetBackgroundList(app, 1, one);
+  } else {
+    // Usa lista por defecto de config.h
+    // cuenta elementos hasta NULL
+    appSetBackgroundList(app, defaultBgCount, defaultBgPaths);
+  }
+
+
   // Cargar imagen base y crear textura (opcional si la carga falla)
-  const char *path = (imagePath && *imagePath) ? imagePath : defaultImagePath;
-  if (!imageLoad(&app->image, path))
-  {
-    fprintf(stderr, "No se pudo cargar %s, continuo sin imagen.\n", path);
-    app->imageTex = NULL; // seguimos, el fondo es opcional
-  }
-  else
-  {
-    app->imageTex = SDL_CreateTextureFromSurface(app->ren, app->image.surface);
-    if (!app->imageTex)
-      fprintf(stderr, "SDL_CreateTextureFromSurface: %s\n", SDL_GetError());
-  }
+  // const char *path = (imagePath && *imagePath) ? imagePath : defaultImagePath;
+  // if (!imageLoad(&app->image, path))
+  // {
+  //   fprintf(stderr, "No se pudo cargar %s, continuo sin imagen.\n", path);
+  //   app->imageTex = NULL; // seguimos, el fondo es opcional
+  // }
+  // else
+  // {
+  //   app->imageTex = SDL_CreateTextureFromSurface(app->ren, app->image.surface);
+  //   if (!app->imageTex)
+  //     fprintf(stderr, "SDL_CreateTextureFromSurface: %s\n", SDL_GetError());
+  // }
 
   // Estado de la nube de puntos (stippling)
   int n0 = (npoints > 0) ? npoints : defaultNPoints;
-  if (!stipplingInit(&app->stip, n0, app->w, app->h, 42u))
+  if (!stipplingInit(&app->stip, n0, app->w, app->h, app->seed))
   {
     fprintf(stderr, "stipplingInit fallo\n");
     // Permitimos continuar para ver solo el fondo si hay imagen
   }
+
+  if (TTF_Init() != 0) {
+    fprintf(stderr, "TTF_Init: %s\n", TTF_GetError());
+  }
+
+  app->font = TTF_OpenFont("/usr/share/fonts/truetype/jetbrains-mono/JetBrainsMono-Regular.ttf", 16);
+  if (!app->font) {
+    fprintf(stderr, "TTF_OpenFont: %s\n", TTF_GetError());
+  }
+
+  app->fpsTex = NULL;
+  app->fpsTexW = app->fpsTexH = 0;
+  app->lastFpsOverlayUpdate = 0.0;
 
   // Ayuda rapida en consola
   printf("[SPACE] paso Lloyd | [A] auto | [-]/[+] step | [G]/[H] gamma | [B] fondo | "
@@ -586,6 +873,22 @@ void appRun(App *app)
           updateFpsTitle(app);
         }
 
+        // Siguiente fondo: ]
+        if (sym == SDLK_o) {
+          int n = app->stip.count;
+          stipplingFree(&app->stip);
+          stipplingInit(&app->stip, n, app->w, app->h, ++app->seed);
+          app->iters = 0;
+          appNextBackground(app);
+          updateFpsTitle(app);
+        }
+
+        // Fondo anterior: [
+        if (sym == SDLK_u) {
+          appPrevBackground(app);
+          updateFpsTitle(app);
+        }
+
         // Captura: marcar para el final del frame actual
         if (sym == SDLK_p)
         {
@@ -659,6 +962,24 @@ void appRun(App *app)
     app->accTime += dt;
     app->frames++;
 
+    if (app->bgPeriod > 0.0) {
+      app->bgTimer += dt;
+      if (app->bgTimer >= app->bgPeriod) {
+        app->bgTimer = 0.0;
+
+        // siguiente imagen
+        appNextBackground(app);
+
+        // reseed de puntos con nueva semilla
+        int n = app->stip.count;
+        stipplingFree(&app->stip);
+        stipplingInit(&app->stip, n, app->w, app->h, ++app->seed);
+
+        app->iters = 0;
+        updateFpsTitle(app);
+      }
+    }
+
     // Modo automatico: avanza Lloyd cada frame (con timing + CSV opcional)
     if (app->autoRun)
     {
@@ -727,6 +1048,14 @@ void appRun(App *app)
       app->wantScreenshot = false;
     }
 
+    if (app->accTime - app->lastFpsOverlayUpdate >= 0.25) {
+      refreshFpsOverlay(app);
+      app->lastFpsOverlayUpdate = app->accTime;
+    }
+
+    // dibuja el overlay
+    drawFpsOverlay(app);
+
     SDL_RenderPresent(app->ren);
   }
 }
@@ -774,7 +1103,7 @@ void appShutdown(App *app)
   if (app->metricsPath)
     free(app->metricsPath);
 
-  imageFree(&app->image); // surface + metadatos
+  // imageFree(&app->image); // surface + metadatos
 
   if (app->ren)
     SDL_DestroyRenderer(app->ren);
@@ -785,6 +1114,16 @@ void appShutdown(App *app)
   // 3) Subsistemas globales
   IMG_Quit();
   SDL_Quit();
+
+  if (app->fpsTex) SDL_DestroyTexture(app->fpsTex);
+  if (app->font)   TTF_CloseFont(app->font);
+  TTF_Quit();
+
+  if (app->bgPaths) {
+    for (int i = 0; i < app->bgCount; ++i) free(app->bgPaths[i]);
+    free(app->bgPaths);
+  }
+
 
   // Estructura principal
   free(app);

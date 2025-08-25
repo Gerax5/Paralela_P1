@@ -1,4 +1,3 @@
-
 # Voronoi Stippling (Secuencial)
 
 Pequeña demo interactiva de **stipple** usando **Algoritmo de Lloyd** sobre una imagen.
@@ -14,7 +13,7 @@ Render y entrada con **SDL2**, carga de imágenes con **SDL2_image**.
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y build-essential libsdl2-dev libsdl2-image-dev
+sudo apt-get install -y build-essential libsdl2-dev libsdl2-image-dev fonts-jetbrains-mono libsdl2-ttf-dev
 ```
 
 ## Compilar
@@ -23,22 +22,24 @@ sudo apt-get install -y build-essential libsdl2-dev libsdl2-image-dev
 
 ```bash
 mkdir -p build/bin
-gcc -std=c11 -O2 -Wall -Wextra -D_POSIX_C_SOURCE=200809L \
-  src/main.c src/app.c src/image.c src/stippling.c src/lloyd.c src/voronoi.c src/utils.c \
-  -Iinclude \
-  $(sdl2-config --cflags) $(pkg-config --cflags SDL2_image) \
-  -o build/bin/stippling_demo \
-  $(sdl2-config --libs) $(pkg-config --libs SDL2_image) -lm
+gcc -std=c11 -O2 -Wall -Wextra -D_POSIX_C_SOURCE=200809L src/main.c src/app.c src/image.c src/stippling.c src/lloyd.c src/voronoi.c src/utils.c -Iinclude $(sdl2-config --cflags) $(pkg-config --cflags SDL2_image SDL2_ttf) -o build/bin/stippling_demo $(sdl2-config --libs) $(pkg-config --libs SDL2_image SDL2_ttf) -lm
 ```
 
 > Nota: `-D_POSIX_C_SOURCE=200809L` habilita `strdup` en GCC/GLIBC.
+
+### Línea directa (con Makefile)
+
+```bash
+mkdir -p build/bin
+make run
+```
 
 ## Ejecutar
 
 ### Modo normal (interactivo)
 
 ```bash
-./build/bin/stippling_demo -n 3000 images/input/twitch.png
+./build/bin/stippling_demo -n 3000
 ```
 
 - `-n 3000` → número de puntos iniciales (opcional).
