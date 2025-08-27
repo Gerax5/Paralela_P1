@@ -2,25 +2,34 @@ TARGET := build/bin/stippling_demo
 SRC    := src/main.c src/app.c src/image.c src/stippling.c src/lloyd.c src/voronoi.c src/utils.c
 OBJ    := $(patsubst src/%.c,build/obj/%.o,$(SRC))
 
-CFLAGS  := -std=c11 -O2 -Wall -Wextra -D_POSIX_C_SOURCE=200809L -Iinclude
+# --- compi y OMP ---
+CC        := gcc
+THREADS  ?= 8
+OMP_FLAGS := -fopenmp
+
+CFLAGS  := -std=c11 -O2 -Wall -Wextra -D_POSIX_C_SOURCE=200809L -Iinclude -fopenmp
 LDFLAGS :=
-LDLIBS  :=
+LDLIBS  := -fopenmp
 
 SDL2_CFLAGS     := $(shell sdl2-config --cflags)
 SDL2_LIBS       := $(shell sdl2-config --libs)
 IMG_TTF_CFLAGS  := $(shell pkg-config --cflags SDL2_image SDL2_ttf)
 IMG_TTF_LIBS    := $(shell pkg-config --libs SDL2_image SDL2_ttf)
 
-CFLAGS += $(SDL2_CFLAGS) $(IMG_TTF_CFLAGS)
-LDLIBS += $(SDL2_LIBS) $(IMG_TTF_LIBS) -lm
+CFLAGS += $(SDL2_CFLAGS) $(IMG_TTF_CFLAGS) $(OMP_FLAGS) -MMD -MP
+LDLIBS += $(SDL2_LIBS) $(IMG_TTF_LIBS) -lm $(OMP_FLAGS)
 
-.PHONY: all run start clean rebuild dirs
+.PHONY: all run run-par start clean rebuild dirs
 
 # Por defecto: solo compila
 all: $(TARGET)
 
 run: all
 	@echo "Build listo: $(TARGET)"
+
+# corre en paralelo (OMP); cambia hilos con: make run-par THREADS=12
+run-par: all
+	STIPPLE_PARALLEL=1 OMP_NUM_THREADS=$(THREADS) $(TARGET) -n 5000
 
 start: $(TARGET)
 	@echo "Ejecutando $(TARGET)"
@@ -41,3 +50,6 @@ clean:
 	@$(RM) -r build
 
 rebuild: clean all
+
+# incluir dependencias automáticas
+-include $(OBJ:.o=.d)
