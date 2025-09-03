@@ -1,10 +1,17 @@
 TARGET := build/bin/stippling_demo
 SRC    := src/main.c src/app.c src/image.c src/stippling.c src/lloyd.c src/voronoi.c src/utils.c
 OBJ    := $(patsubst src/%.c,build/obj/%.o,$(SRC))
+N      ?= 5000
 
 # --- compi y OMP ---
 CC        := gcc
-THREADS  ?= 8
+
+# Núcleos disponibles por defecto
+THREADS ?= $(shell \
+  (getconf _NPROCESSORS_ONLN) 2>/dev/null || \
+  (nproc) 2>/dev/null || \
+  (sysctl -n hw.ncpu) 2>/dev/null || echo 8)
+
 OMP_FLAGS := -fopenmp
 
 CFLAGS  := -std=c11 -O2 -Wall -Wextra -D_POSIX_C_SOURCE=200809L -Iinclude -fopenmp
@@ -29,7 +36,7 @@ run: all
 
 # corre en paralelo (OMP); cambia hilos con: make run-par THREADS=12
 run-par: all
-	STIPPLE_PARALLEL=1 OMP_NUM_THREADS=$(THREADS) $(TARGET) -n 5000
+	STIPPLE_PARALLEL=1 OMP_NUM_THREADS=$(THREADS) $(TARGET) -n ${N}
 
 start: $(TARGET)
 	@echo "Ejecutando $(TARGET)"
