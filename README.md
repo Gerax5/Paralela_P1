@@ -30,19 +30,27 @@ gcc -std=c11 -O2 -Wall -Wextra -D_POSIX_C_SOURCE=200809L src/main.c src/app.c sr
 ### Línea directa (con Makefile)
 
 ```bash
-mkdir -p build/bin
-make run
+make clean
+make
 ```
 
 ## Ejecutar
 
-### Modo normal (interactivo)
+### Modo normal
+
+#### Secuencial
 
 ```bash
-./build/bin/stippling_demo -n 3000
+./build/bin/stippling_demo -n 5000
 ```
 
-- `-n 3000` → número de puntos iniciales (opcional).
+#### Paralelo
+
+```bash
+STIPPLE_PARALLEL=1 OMP_NUM_THREADS=$(nproc) ./build/bin/stippling_demo -n 5000
+```
+
+- `-n 5000` → número de puntos iniciales (opcional).
 - Si omites la imagen, usa la ruta por defecto de `include/config.h` (`defaultImagePath`).
 
 **Controles (teclado):**
