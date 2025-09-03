@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <math.h>
 #include "image.h"
+#include <omp.h>
 
 /**
  * srgbToLinear01
@@ -108,6 +109,8 @@ bool imageLoad(Image *img, const char *path)
   img->h = conv->h;
   img->pitchPixels = conv->pitch / 4;   // bytes/row -> píxeles/row
   img->pixels = (Uint32 *)conv->pixels; // acceso directo RGBA8888
+  img->luma = NULL;
+  imageBuildLuma(img);
 
   return true;
 }
@@ -138,10 +141,13 @@ void imageFree(Image *img)
 
   if (img->surface) // liberar surface si existe
     SDL_FreeSurface(img->surface);
+  
+  free(img->luma);
 
   // dejar en estado neutro
   img->surface = NULL;
   img->pixels = NULL;
+  img->luma = NULL;
   img->w = 0;
   img->h = 0;
   img->pitchPixels = 0;
@@ -170,6 +176,48 @@ static inline void rgbaToUint8(Uint32 px, Uint8 *r, Uint8 *g, Uint8 *b, Uint8 *a
   *g = (px >> 16) & 0xFF;
   *b = (px >> 8) & 0xFF;
   *a = (px >> 0) & 0xFF;
+}
+
+void imageBuildLuma(Image *img)
+{
+  if (!img || !img->pixels || img->w <= 0 || img->h <= 0)
+    return;
+
+  // Si ya había luma, recrearla (por si cambió la surface)
+  free(img->luma);
+  img->luma = (float *)malloc((size_t)img->w * (size_t)img->h * sizeof(float));
+  if (!img->luma)
+    return;
+
+  const int W = img->w;
+  const int H = img->h;
+
+  // Relleno en paralelo (si se compila con OpenMP)
+  #pragma omp parallel for schedule(static)
+  for (int y = 0; y < H; ++y)
+  {
+    const Uint32 *rowPx = img->pixels + (size_t)y * (size_t)img->pitchPixels;
+    float *rowY         = img->luma   + (size_t)y * (size_t)W;
+    
+    for (int x = 0; x < W; ++x)
+    {
+      const Uint32 px = rowPx[x];
+
+      Uint8 R8, G8, B8, A; (void)A;
+      SDL_GetRGBA(px, img->surface->format, &R8, &G8, &B8, &A);
+
+      const float Rs = R8 / 255.0f;
+      const float Gs = G8 / 255.0f;
+      const float Bs = B8 / 255.0f;
+
+      // Usa el helper ya definido arriba
+      const float R = srgbToLinear01(Rs);
+      const float G = srgbToLinear01(Gs);
+      const float B = srgbToLinear01(Bs);
+
+      rowY[x] = 0.2126f * R + 0.7152f * G + 0.0722f * B;
+    }
+  }
 }
 
 /**
@@ -306,11 +354,26 @@ float sampleIntensityBilinearUV(const Image *img, float u, float v)
   float y = v * (img->h - 1);
 
   // Vecinos bilineales
-  int x0 = (int)floorf(x), y0 = (int)floorf(y);
+  int x0 = (int)floorf(x);
+  int y0 = (int)floorf(y);
   int x1 = (x0 + 1 < img->w) ? x0 + 1 : x0;
   int y1 = (y0 + 1 < img->h) ? y0 + 1 : y0;
 
-  float tx = x - (float)x0, ty = y - (float)y0;
+  float tx = x - (float)x0;
+  float ty = y - (float)y0;
+
+  if (img->luma)
+  {
+    int W = img->w;
+    float y00 = img->luma[(size_t)y0 * (size_t)W + x0];
+    float y10 = img->luma[(size_t)y0 * (size_t)W + x1];
+    float y01 = img->luma[(size_t)y1 * (size_t)W + x0];
+    float y11 = img->luma[(size_t)y1 * (size_t)W + x1];
+
+    float yx0 = y00 + tx * (y10 - y00);
+    float yx1 = y01 + tx * (y11 - y01);
+    return yx0 + ty * (yx1 - yx0);
+  }
 
   Uint32 p00 = img->pixels[y0 * img->pitchPixels + x0];
   Uint32 p10 = img->pixels[y0 * img->pitchPixels + x1];

@@ -35,6 +35,9 @@ typedef struct
 
   /* Superficie SDL propietaria del buffer. */
   SDL_Surface *surface;
+
+  /* Luminancia lineal precomputada (size = w*h, fila mayor)*/
+  float *luma;
 } Image;
 
 /**
@@ -102,3 +105,16 @@ float sampleIntensityBilinearUV(const Image *img, float u, float v);
  */
 void sampleRgbBilinearUV(const Image *img, float u, float v,
                          Uint8 *r, Uint8 *g, Uint8 *b);
+
+
+/**
+ * imageBuildLuma
+ * -------------------
+ * Construye o actualiza el buffer de luminancia lineal precomputada `img->luma`.
+ * Params:
+ *    img -> imagen fuente
+ * Return:
+ *    apunta a un buffer w*h listo para muestreo rapido en `sampleIntensityBilinearUV`.
+ * 
+*/
+void imageBuildLuma(Image *img);
