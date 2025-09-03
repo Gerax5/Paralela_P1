@@ -51,7 +51,7 @@ while (( "$#" )); do
     --gstart) GSTART="$2"; shift 2 ;;
     --gend)   GEND="$2"; shift 2 ;;
     --gstep)  GSTEP="$2"; shift 2 ;;
-    --gevery) G EVERY="$2"; GEVERY="${2}"; shift 2 ;;
+    --gevery) GEVERY="$2"; GEVERY="${2}"; shift 2 ;;
     *) echo "Flag desconocida: $1"; usage; exit 1 ;;
   esac
 done

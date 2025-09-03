@@ -23,6 +23,11 @@ avg_ms() {
   awk -F',' 'NR>1 {sum+=$2; n++} END{ if(n>0) printf("%.6f", sum/n); else print "0" }' "${f}"
 }
 
+avg_ms() { 
+  local f="$1" 
+  awk -F',' 'NR>1 {sum+=$9; n++} END{ if(n>0) printf("%.6f", sum/n); else print "0" }' "${f}" 
+}
+
 SEQ_MEAN="$(avg_ms "${SEQ}")"
 OMP_MEAN="$(avg_ms "${OMP}")"
 
