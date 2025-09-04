@@ -1,5 +1,5 @@
 TARGET := build/bin/stippling_demo
-SRC    := src/main.c src/app.c src/image.c src/stippling.c src/lloyd.c src/voronoi.c src/utils.c
+SRC    := src/main.c src/app.c src/image.c src/stippling_parallel.c src/lloyd.c src/voronoi_parallel.c src/utils.c
 OBJ    := $(patsubst src/%.c,build/obj/%.o,$(SRC))
 N      ?= 5000
 
