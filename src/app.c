@@ -1,4 +1,3 @@
-// app.c
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_image.h>
 #include <SDL2/SDL_ttf.h>
@@ -35,14 +34,14 @@ struct App
   int h; // alto  de ventana
 
   // --- Reloj / metricas
-  Uint64 freq;      // SDL_GetPerformanceFrequency()
-  Uint64 last;      // ultima lectura de contador (para dt)
-  double accTime;   // segundos acumulados desde appInit
-  int    frames;    // frames renderizados
+  Uint64 freq;    // SDL_GetPerformanceFrequency()
+  Uint64 last;    // ultima lectura de contador (para dt)
+  double accTime; // segundos acumulados desde appInit
+  int frames;     // frames renderizados
 
   // Cache de UI (para no recalcular cada frame)
-  double fpsAvg;        // FPS promedio desde el inicio, cacheado
-  double lastUiUpdate;  // último timestamp en el que se refrescó título/overlay
+  double fpsAvg;       // FPS promedio desde el inicio, cacheado
+  double lastUiUpdate; // último timestamp en el que se refrescó título/overlay
 
   // --- Recursos de imagen / puntos
   Image image;           // surface RGBA8888 + acceso a pixeles
@@ -54,41 +53,41 @@ struct App
   float maxRadius;       // radio maximo por punto (px)  [>= minRadius]
 
   // --- Lloyd (parametros/estado)
-  bool  autoRun;     // ON: ejecuta un paso de Lloyd por frame
-  int   iters;       // iteraciones de Lloyd acumuladas
-  int   pixelStride; // stride de muestreo (>=1)  [mayor = mas rapido/menos preciso]
-  float gammaW;      // exponente del peso; segun config:
-                     //   STIPPLE_WEIGHT_BY_BRIGHTNESS==1 -> w = lum^gammaW
-                     //   STIPPLE_WEIGHT_BY_BRIGHTNESS==0 -> w = (1 - lum)^gammaW
-  unsigned seed;     // semilla para resembrar la nube (tecla R)
+  bool autoRun;    // ON: ejecuta un paso de Lloyd por frame
+  int iters;       // iteraciones de Lloyd acumuladas
+  int pixelStride; // stride de muestreo (>=1)  [mayor = mas rapido/menos preciso]
+  float gammaW;    // exponente del peso; segun config:
+                   //   STIPPLE_WEIGHT_BY_BRIGHTNESS==1 -> w = lum^gammaW
+                   //   STIPPLE_WEIGHT_BY_BRIGHTNESS==0 -> w = (1 - lum)^gammaW
+  unsigned seed;   // semilla para resembrar la nube (tecla R)
 
   // --- Opciones visuales / utilidades
   bool showBg;         // ON: dibuja la imagen de fondo
-  int  dotRadius;      // radio visual fijo (solo en stipplingRender)
+  int dotRadius;       // radio visual fijo (solo en stipplingRender)
   bool wantScreenshot; // marca para guardar PNG al final del frame actual
 
   // --- Modo batch / logging
-  int   maxIters;      // si >0, salir cuando iters >= maxIters
-  char *metricsPath;   // ruta CSV para log de metricas (propiedad de App; se libera)
+  int maxIters;      // si >0, salir cuando iters >= maxIters
+  char *metricsPath; // ruta CSV para log de metricas (propiedad de App; se libera)
 
   // --- Sweep de gamma (testing por entorno)
-  bool  sweepGamma;           // ON: barrido de gamma automatico
-  float gStart, gEnd, gStep;  // rango e incremento de gamma
-  int   gEvery;               // aplicar incremento cada N iteraciones
+  bool sweepGamma;           // ON: barrido de gamma automatico
+  float gStart, gEnd, gStep; // rango e incremento de gamma
+  int gEvery;                // aplicar incremento cada N iteraciones
 
   // --- Overlay FPS
-  TTF_Font    *font;   // fuente para texto
+  TTF_Font *font;      // fuente para texto
   SDL_Texture *fpsTex; // textura cacheada del texto "FPS: ... "
-  int          fpsTexW;
-  int          fpsTexH;
+  int fpsTexW;
+  int fpsTexH;
 
   // --- Lista de fondos
-  char  **bgPaths;
-  int     bgCount;
-  int     bgIndex;
+  char **bgPaths;
+  int bgCount;
+  int bgIndex;
 
-  double bgTimer;   // segundos acumulados desde el último cambio
-  double bgPeriod;  // cada cuántos segundos cambiar de imagen (>0 activa)
+  double bgTimer;  // segundos acumulados desde el último cambio
+  double bgPeriod; // cada cuántos segundos cambiar de imagen (>0 activa)
 };
 
 /**
@@ -109,32 +108,37 @@ struct App
  *   - Se invoca cada ~0.25s desde appRun() para evitar costo por frame.
  *   - Si no hay fuente (app->font == NULL) no hace nada.
  */
-static void refreshFpsOverlay(App *app) {
-  if (!app->font) return;
+static void refreshFpsOverlay(App *app)
+{
+  if (!app->font)
+    return;
 
   char buf[96];
   snprintf(buf, sizeof(buf), "FPS: %.1f | it=%d | step=%d | gamma=%.2f",
            app->fpsAvg, app->iters, app->pixelStride, app->gammaW);
 
   SDL_Color color = app->invertTheme
-                      ? (SDL_Color){ 10, 10, 10, 255 }
-                      : (SDL_Color){ 240, 240, 240, 255 };
+                        ? (SDL_Color){10, 10, 10, 255}
+                        : (SDL_Color){240, 240, 240, 255};
 
   SDL_Surface *surf = TTF_RenderText_Blended(app->font, buf, color);
-  if (!surf) {
+  if (!surf)
+  {
     fprintf(stderr, "TTF_RenderText_Blended: %s\n", TTF_GetError());
     return;
   }
 
   SDL_Texture *tex = SDL_CreateTextureFromSurface(app->ren, surf);
-  if (!tex) {
+  if (!tex)
+  {
     fprintf(stderr, "SDL_CreateTextureFromSurface: %s\n", SDL_GetError());
     SDL_FreeSurface(surf);
     return;
   }
 
-  if (app->fpsTex) SDL_DestroyTexture(app->fpsTex);
-  app->fpsTex  = tex;
+  if (app->fpsTex)
+    SDL_DestroyTexture(app->fpsTex);
+  app->fpsTex = tex;
   app->fpsTexW = surf->w;
   app->fpsTexH = surf->h;
 
@@ -154,23 +158,25 @@ static void refreshFpsOverlay(App *app) {
  *   - Coordenadas fijas (x=10,y=10) con padding para mejorar legibilidad.
  *   - Requiere SDL_BLENDMODE_BLEND para el rect de fondo.
  */
-static void drawFpsOverlay(App *app) {
-  if (!app->fpsTex) return;
+static void drawFpsOverlay(App *app)
+{
+  if (!app->fpsTex)
+    return;
 
   const int pad = 6;
-  const int x   = 10;
-  const int y   = 10;
+  const int x = 10;
+  const int y = 10;
 
   SDL_SetRenderDrawBlendMode(app->ren, SDL_BLENDMODE_BLEND);
   SDL_Color bg = app->invertTheme
-                   ? (SDL_Color){ 255, 255, 255, 160 }
-                   : (SDL_Color){ 0, 0, 0, 160 };
+                     ? (SDL_Color){255, 255, 255, 160}
+                     : (SDL_Color){0, 0, 0, 160};
 
   SDL_SetRenderDrawColor(app->ren, bg.r, bg.g, bg.b, bg.a);
-  SDL_Rect box = { x - pad, y - pad, app->fpsTexW + pad*2, app->fpsTexH + pad*2 };
+  SDL_Rect box = {x - pad, y - pad, app->fpsTexW + pad * 2, app->fpsTexH + pad * 2};
   SDL_RenderFillRect(app->ren, &box);
 
-  SDL_Rect dst = { x, y, app->fpsTexW, app->fpsTexH };
+  SDL_Rect dst = {x, y, app->fpsTexW, app->fpsTexH};
   SDL_RenderCopy(app->ren, app->fpsTex, NULL, &dst);
 }
 
@@ -182,10 +188,13 @@ static void drawFpsOverlay(App *app) {
  * Params:
  *   path -> ruta del directorio (p.ej. "images/output").
  */
-static void ensureDir(const char* path) {
+static void ensureDir(const char *path)
+{
   struct stat st;
-  if (stat(path, &st) != 0) {
-    if (mkdir(path, 0755) != 0 && errno != EEXIST) {
+  if (stat(path, &st) != 0)
+  {
+    if (mkdir(path, 0755) != 0 && errno != EEXIST)
+    {
       perror("mkdir");
     }
   }
@@ -209,17 +218,24 @@ static void ensureDir(const char* path) {
  *   - Libera la textura anterior y el Image previo antes de cargar.
  *   - No cambia app->showBg; solo actualiza el recurso de imagen.
  */
-static bool loadBackground(App* app, const char* path) {
-  if (app->imageTex) { SDL_DestroyTexture(app->imageTex); app->imageTex = NULL; }
+static bool loadBackground(App *app, const char *path)
+{
+  if (app->imageTex)
+  {
+    SDL_DestroyTexture(app->imageTex);
+    app->imageTex = NULL;
+  }
   imageFree(&app->image);
 
-  if (!imageLoad(&app->image, path)) {
+  if (!imageLoad(&app->image, path))
+  {
     fprintf(stderr, "No se pudo cargar fondo: %s\n", path);
     return false;
   }
 
   app->imageTex = SDL_CreateTextureFromSurface(app->ren, app->image.surface);
-  if (!app->imageTex) {
+  if (!app->imageTex)
+  {
     fprintf(stderr, "SDL_CreateTextureFromSurface: %s\n", SDL_GetError());
     return false;
   }
@@ -245,21 +261,27 @@ static bool loadBackground(App* app, const char* path) {
  *   - Duplica cada string (propiedad pasa a App).
  *   - Inicializa bgIndex=0 y carga ese fondo (loadBackground).
  */
-bool appSetBackgroundList(App* app, int count, const char* const* paths) {
-  if (app->bgPaths) {
-    for (int i = 0; i < app->bgCount; ++i) free(app->bgPaths[i]);
+bool appSetBackgroundList(App *app, int count, const char *const *paths)
+{
+  if (app->bgPaths)
+  {
+    for (int i = 0; i < app->bgCount; ++i)
+      free(app->bgPaths[i]);
     free(app->bgPaths);
     app->bgPaths = NULL;
   }
   app->bgCount = 0;
   app->bgIndex = 0;
 
-  if (count <= 0 || !paths) return false;
+  if (count <= 0 || !paths)
+    return false;
 
-  app->bgPaths = (char**)calloc(count, sizeof(char*));
-  if (!app->bgPaths) return false;
+  app->bgPaths = (char **)calloc(count, sizeof(char *));
+  if (!app->bgPaths)
+    return false;
 
-  for (int i = 0; i < count; ++i) {
+  for (int i = 0; i < count; ++i)
+  {
     app->bgPaths[i] = strdup(paths[i]);
   }
   app->bgCount = count;
@@ -279,8 +301,10 @@ bool appSetBackgroundList(App* app, int count, const char* const* paths) {
  *   - No hace reseed de puntos ni cambia flags visuales.
  *   - No hace nada si bgCount <= 0.
  */
-void appNextBackground(App* app) {
-  if (app->bgCount <= 0) return;
+void appNextBackground(App *app)
+{
+  if (app->bgCount <= 0)
+    return;
   app->bgIndex = (app->bgIndex + 1) % app->bgCount;
   (void)loadBackground(app, app->bgPaths[app->bgIndex]);
 }
@@ -297,8 +321,10 @@ void appNextBackground(App* app) {
  *   - No hace reseed de puntos ni cambia flags visuales.
  *   - No hace nada si bgCount <= 0.
  */
-void appPrevBackground(App* app) {
-  if (app->bgCount <= 0) return;
+void appPrevBackground(App *app)
+{
+  if (app->bgCount <= 0)
+    return;
   app->bgIndex = (app->bgIndex - 1 + app->bgCount) % app->bgCount;
   (void)loadBackground(app, app->bgPaths[app->bgIndex]);
 }
@@ -356,17 +382,24 @@ static void updateFpsTitle(App *app)
  */
 static void sweepGammaTick(App *app)
 {
-  if (!app->sweepGamma) return;
-  if (app->gEvery < 1) app->gEvery = 1;
+  if (!app->sweepGamma)
+    return;
+  if (app->gEvery < 1)
+    app->gEvery = 1;
 
   if (app->iters > 0 && (app->iters % app->gEvery) == 0)
   {
     float next = app->gammaW + app->gStep;
-    if (app->gStep > 0.f) {
+    if (app->gStep > 0.f)
+    {
       app->gammaW = (next > app->gEnd) ? app->gEnd : next;
-    } else if (app->gStep < 0.f) {
+    }
+    else if (app->gStep < 0.f)
+    {
       app->gammaW = (next < app->gEnd) ? app->gEnd : next;
-    } else {
+    }
+    else
+    {
       // gStep == 0 -> no cambiar nada
     }
     updateFpsTitle(app);
@@ -512,17 +545,19 @@ bool appInit(App **outApp, int width, int height, const char *title,
   app->metricsPath = NULL;
 
   // Rotación automática de fondos
-  app->bgTimer  = 0.0;
-  app->bgPeriod = 20.0;  // cada 20s por defecto
-  const char* env_bg = getenv("STIPPLE_BG_SECONDS");
-  if (env_bg) {
+  app->bgTimer = 0.0;
+  app->bgPeriod = 20.0; // cada 20s por defecto
+  const char *env_bg = getenv("STIPPLE_BG_SECONDS");
+  if (env_bg)
+  {
     double v = atof(env_bg);
-    if (v > 0.0) app->bgPeriod = v;
+    if (v > 0.0)
+      app->bgPeriod = v;
   }
 
   const char *env_auto = getenv("STIPPLE_AUTORUN");   // "1" para auto
   const char *env_maxi = getenv("STIPPLE_MAX_ITERS"); // p.ej. "300"
-  const char *env_csv  = getenv("STIPPLE_METRICS");   // ruta CSV
+  const char *env_csv = getenv("STIPPLE_METRICS");    // ruta CSV
 
   // Barrido de gamma (opcional)
   app->sweepGamma = false;
@@ -531,33 +566,41 @@ bool appInit(App **outApp, int width, int height, const char *title,
   app->gEvery = 1;
 
   const char *env_gstart = getenv("STIPPLE_GAMMA_START"); // opcional
-  const char *env_gend   = getenv("STIPPLE_GAMMA_END");   // requerido para activar
-  const char *env_gstep  = getenv("STIPPLE_GAMMA_STEP");  // requerido para activar
+  const char *env_gend = getenv("STIPPLE_GAMMA_END");     // requerido para activar
+  const char *env_gstep = getenv("STIPPLE_GAMMA_STEP");   // requerido para activar
   const char *env_gevery = getenv("STIPPLE_GAMMA_EVERY"); // opcional, default=1
 
   if (env_gend && env_gstep)
   {
     app->sweepGamma = true;
-    app->gEnd   = (float)atof(env_gend);
-    app->gStep  = (float)atof(env_gstep);
+    app->gEnd = (float)atof(env_gend);
+    app->gStep = (float)atof(env_gstep);
     app->gEvery = (env_gevery && atoi(env_gevery) > 0) ? atoi(env_gevery) : 1;
 
-    if (env_gstart) {
+    if (env_gstart)
+    {
       app->gStart = (float)atof(env_gstart);
       app->gammaW = app->gStart; // arrancar desde START
-    } else {
+    }
+    else
+    {
       app->gStart = app->gammaW; // si no hay START, parte del gamma actual
     }
 
-    if (!app->autoRun) app->autoRun = true;
+    if (!app->autoRun)
+      app->autoRun = true;
   }
 
-  if (env_auto && *env_auto == '1') app->autoRun = true;
-  if (env_maxi) {
+  if (env_auto && *env_auto == '1')
+    app->autoRun = true;
+  if (env_maxi)
+  {
     int v = atoi(env_maxi);
-    if (v > 0) app->maxIters = v;
+    if (v > 0)
+      app->maxIters = v;
   }
-  if (env_csv && *env_csv) {
+  if (env_csv && *env_csv)
+  {
     app->metricsPath = strdup(env_csv); // se libera en appShutdown
   }
 
@@ -570,8 +613,10 @@ bool appInit(App **outApp, int width, int height, const char *title,
   if (!app->win || !app->ren)
   {
     fprintf(stderr, "SDL_Create: %s\n", SDL_GetError());
-    if (app->ren) SDL_DestroyRenderer(app->ren);
-    if (app->win) SDL_DestroyWindow(app->win);
+    if (app->ren)
+      SDL_DestroyRenderer(app->ren);
+    if (app->win)
+      SDL_DestroyWindow(app->win);
     free(app);
     SDL_Quit();
     return false;
@@ -600,14 +645,17 @@ bool appInit(App **outApp, int width, int height, const char *title,
   ensureDir("images/input");
   ensureDir("images/output");
 
-  app->bgPaths  = NULL;
-  app->bgCount  = 0;
-  app->bgIndex  = 0;
+  app->bgPaths = NULL;
+  app->bgCount = 0;
+  app->bgIndex = 0;
 
-  if (imagePath && *imagePath) {
-    const char* one[] = { imagePath };
+  if (imagePath && *imagePath)
+  {
+    const char *one[] = {imagePath};
     appSetBackgroundList(app, 1, one);
-  } else {
+  }
+  else
+  {
     appSetBackgroundList(app, defaultBgCount, defaultBgPaths);
   }
 
@@ -619,12 +667,14 @@ bool appInit(App **outApp, int width, int height, const char *title,
     // Permitimos continuar para ver solo el fondo si hay imagen
   }
 
-  if (TTF_Init() != 0) {
+  if (TTF_Init() != 0)
+  {
     fprintf(stderr, "TTF_Init: %s\n", TTF_GetError());
   }
 
   app->font = TTF_OpenFont("/usr/share/fonts/truetype/jetbrains-mono/JetBrainsMono-Regular.ttf", 16);
-  if (!app->font) {
+  if (!app->font)
+  {
     fprintf(stderr, "TTF_OpenFont: %s\n", TTF_GetError());
   }
 
@@ -674,7 +724,8 @@ bool appInit(App **outApp, int width, int height, const char *title,
  */
 void appRun(App *app)
 {
-  if (!app) return;
+  if (!app)
+    return;
 
   bool running = true;
 
@@ -694,7 +745,8 @@ void appRun(App *app)
       {
         SDL_Keycode sym = e.key.keysym.sym;
 
-        if (sym == SDLK_ESCAPE) running = false;
+        if (sym == SDLK_ESCAPE)
+          running = false;
 
         // Paso manual de Lloyd (con timing + CSV opcional)
         if (sym == SDLK_SPACE)
@@ -735,28 +787,53 @@ void appRun(App *app)
         // Granularidad de muestreo: step-- / step++
         if (sym == SDLK_MINUS || sym == SDLK_KP_MINUS)
         {
-          if (app->pixelStride > 1) app->pixelStride--;
+          if (app->pixelStride > 1)
+            app->pixelStride--;
           updateFpsTitle(app);
         }
         if (sym == SDLK_PLUS || sym == SDLK_KP_PLUS || sym == SDLK_EQUALS)
         {
-          if (app->pixelStride < 64) app->pixelStride++;
+          if (app->pixelStride < 64)
+            app->pixelStride++;
           updateFpsTitle(app);
         }
 
         // Gamma (peso de oscuridad)
-        if (sym == SDLK_g) { app->gammaW *= 1.10f; updateFpsTitle(app); }
-        if (sym == SDLK_h) { app->gammaW /= 1.10f; updateFpsTitle(app); }
+        if (sym == SDLK_g)
+        {
+          app->gammaW *= 1.10f;
+          updateFpsTitle(app);
+        }
+        if (sym == SDLK_h)
+        {
+          app->gammaW /= 1.10f;
+          updateFpsTitle(app);
+        }
 
         // Fondo ON/OFF (imagen de referencia)
-        if (sym == SDLK_b) { app->showBg = !app->showBg; updateFpsTitle(app); }
+        if (sym == SDLK_b)
+        {
+          app->showBg = !app->showBg;
+          updateFpsTitle(app);
+        }
 
         // Radio visual de puntos (solo render)
-        if (sym == SDLK_z) { if (app->dotRadius > 1)  app->dotRadius--; updateFpsTitle(app); }
-        if (sym == SDLK_x) { if (app->dotRadius < 20) app->dotRadius++; updateFpsTitle(app); }
+        if (sym == SDLK_z)
+        {
+          if (app->dotRadius > 1)
+            app->dotRadius--;
+          updateFpsTitle(app);
+        }
+        if (sym == SDLK_x)
+        {
+          if (app->dotRadius < 20)
+            app->dotRadius++;
+          updateFpsTitle(app);
+        }
 
         // Siguiente fondo: 'o'
-        if (sym == SDLK_o) {
+        if (sym == SDLK_o)
+        {
           int n = app->stip.count; // conservar N actual
           stipplingFree(&app->stip);
           stipplingInit(&app->stip, n, app->w, app->h, ++app->seed);
@@ -766,13 +843,15 @@ void appRun(App *app)
         }
 
         // Fondo anterior: 'u'
-        if (sym == SDLK_u) {
+        if (sym == SDLK_u)
+        {
           appPrevBackground(app);
           updateFpsTitle(app);
         }
 
         // Captura: marcar para el final del frame actual
-        if (sym == SDLK_p) app->wantScreenshot = true;
+        if (sym == SDLK_p)
+          app->wantScreenshot = true;
 
         // Re-seed: reinicia nube de puntos con nueva semilla (misma N)
         if (sym == SDLK_r)
@@ -785,23 +864,34 @@ void appRun(App *app)
         }
 
         // Color ON/OFF (C)
-        if (sym == SDLK_c) { app->colorPoints = !app->colorPoints; updateFpsTitle(app); }
+        if (sym == SDLK_c)
+        {
+          app->colorPoints = !app->colorPoints;
+          updateFpsTitle(app);
+        }
 
         // Invertir tema (I)
-        if (sym == SDLK_i) { app->invertTheme = !app->invertTheme; updateFpsTitle(app); }
+        if (sym == SDLK_i)
+        {
+          app->invertTheme = !app->invertTheme;
+          updateFpsTitle(app);
+        }
 
         // Min radius (N/M)
         if (sym == SDLK_n)
         {
           app->minRadius -= 0.1f;
-          if (app->minRadius < 0.5f) app->minRadius = 0.5f;
-          if (app->minRadius > app->maxRadius) app->minRadius = app->maxRadius;
+          if (app->minRadius < 0.5f)
+            app->minRadius = 0.5f;
+          if (app->minRadius > app->maxRadius)
+            app->minRadius = app->maxRadius;
           updateFpsTitle(app);
         }
         if (sym == SDLK_m)
         {
           app->minRadius += 0.1f;
-          if (app->minRadius > app->maxRadius) app->minRadius = app->maxRadius;
+          if (app->minRadius > app->maxRadius)
+            app->minRadius = app->maxRadius;
           updateFpsTitle(app);
         }
 
@@ -809,13 +899,15 @@ void appRun(App *app)
         if (sym == SDLK_COMMA)
         {
           app->maxRadius -= 0.1f;
-          if (app->maxRadius < app->minRadius) app->maxRadius = app->minRadius;
+          if (app->maxRadius < app->minRadius)
+            app->maxRadius = app->minRadius;
           updateFpsTitle(app);
         }
         if (sym == SDLK_PERIOD)
         {
           app->maxRadius += 0.1f;
-          if (app->maxRadius > 20.f) app->maxRadius = 20.f;
+          if (app->maxRadius > 20.f)
+            app->maxRadius = 20.f;
           updateFpsTitle(app);
         }
       }
@@ -829,18 +921,20 @@ void appRun(App *app)
     app->frames++;
 
     // Rotación automática de fondo + reseed
-    if (app->bgPeriod > 0.0) {
+    if (app->bgPeriod > 0.0)
+    {
       app->bgTimer += dt;
-      if (app->bgTimer >= app->bgPeriod) {
-        app->bgTimer = 0.0;
-        appNextBackground(app);
+      if (app->bgTimer >= app->bgPeriod)
+      {
+        // app->bgTimer = 0.0;
+        // appNextBackground(app);
 
-        int n = app->stip.count;
-        stipplingFree(&app->stip);
-        stipplingInit(&app->stip, n, app->w, app->h, ++app->seed);
+        // int n = app->stip.count;
+        // stipplingFree(&app->stip);
+        // stipplingInit(&app->stip, n, app->w, app->h, ++app->seed);
 
-        app->iters = 0;
-        updateFpsTitle(app);
+        // app->iters = 0;
+        // updateFpsTitle(app);
       }
     }
 
@@ -930,30 +1024,39 @@ void appRun(App *app)
  */
 void appShutdown(App *app)
 {
-  if (!app) return;
+  if (!app)
+    return;
 
   // 1) Recursos propios
   stipplingFree(&app->stip); // nube de puntos
 
   // 2) Gráficos
-  if (app->fpsTex) SDL_DestroyTexture(app->fpsTex);
-  if (app->imageTex) SDL_DestroyTexture(app->imageTex);
+  if (app->fpsTex)
+    SDL_DestroyTexture(app->fpsTex);
+  if (app->imageTex)
+    SDL_DestroyTexture(app->imageTex);
   imageFree(&app->image); // liberar surface + metadatos
 
   // Métricas (si se usó logging a CSV)
-  if (app->metricsPath) free(app->metricsPath);
+  if (app->metricsPath)
+    free(app->metricsPath);
 
-  if (app->ren) SDL_DestroyRenderer(app->ren);
-  if (app->win) SDL_DestroyWindow(app->win);
+  if (app->ren)
+    SDL_DestroyRenderer(app->ren);
+  if (app->win)
+    SDL_DestroyWindow(app->win);
 
-  if (app->font) TTF_CloseFont(app->font);
+  if (app->font)
+    TTF_CloseFont(app->font);
   TTF_Quit();
 
   IMG_Quit();
   SDL_Quit();
 
-  if (app->bgPaths) {
-    for (int i = 0; i < app->bgCount; ++i) free(app->bgPaths[i]);
+  if (app->bgPaths)
+  {
+    for (int i = 0; i < app->bgCount; ++i)
+      free(app->bgPaths[i]);
     free(app->bgPaths);
   }
 

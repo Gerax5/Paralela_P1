@@ -19,6 +19,10 @@
 - [Documentación de código: Image](#imagec--carga-y-muestreo-de-imágenes)
 - [Documentación de código: Utils](#utilsc--utilidades-de-fs-tiempo-y-csv)
 
+## Introducción
+
+![Flujo de trabajo](./workflow.jpg)
+
 # Algoritmo Matemático: Voronoi Stippling
 
 ## 1. Diagramas de Voronoi (Región de Influencia)
@@ -1320,6 +1324,45 @@ util_csv_append("images/output/seq/metrics.csv",
 
 # Pruebas
 
+Las pruebas fueron realizadas aumentando la cantidad de puntos que se hicieron para renderizar la imagen y aplicar el algoritmo voronoi stippling. Como nota se quiere agregar se utilizó la primera máquina, las carácteristicas se describen a continuación.
+
+| Característica            | Máquina 1 (Laptop / VMware)                                              | Máquina 2 (PC de escritorio)                                                    |
+| ------------------------- | ------------------------------------------------------------------------ | ------------------------------------------------------------------------------- |
+| **Procesador (CPU)**      | Intel Core i7-10750H (6 núcleos / 12 hilos, 2.6-5.0 GHz, 10ª gen, móvil) | Intel Core i7-14700KF (20 núcleos / 28 hilos, 3.4-5.6 GHz, 14ª gen, escritorio) |
+| **RAM**                   | 32 GB DDR4                                                               | 64 GB DDR5 (?)                                                                  |
+| **Almacenamiento**        | 1 SSD NVMe + 1 HDD (RAID)                                                | 2 SSDs NVMe                                                                     |
+| **Gráficos (GPU)**        | Intel UHD integrada + NVIDIA GTX (modelo no especificado)                | NVIDIA RTX (modelo no especificado)                                             |
+| **Red**                   | Wi-Fi + Ethernet virtual (VMware)                                        | Ethernet física                                                                 |
+| **Uso de virtualización** | Sí, tiene adaptadores VMware instalados                                  | No, conexión directa                                                            |
+| **Tipo de equipo**        | Laptop (procesador serie H, pensado para portátiles)                     | Desktop (alto rendimiento, gaming/workstation)                                  |
+
+> **Nota:** El rendimiento el computo varía ya que para una sola prueba para 50 000 puntos la diferencia entre ambos equipos donde se descrubrió que la versión paralela en cuanto a tiempo resultó 7 veces más rápido, se adjuntan algunos ejemplos de medición con capturas.
+
+![alt text](./ejemplo_mediciones.jpg)
+
+## Código
+
+```bash
+OMP_NUM_THREADS=1 ./tests/run_grid.sh -i images/input/twitch.png -n "20000" -s "3" -k 50 -o tests/data_seq
+
+STIPPLE_PARALLEL=1 OMP_NUM_THREADS=20 ./tests/run_grid.sh -i images/input/twitch.png -n "20000" -s "3" -k 50 -o tests/data_omp
+
+
+./tests/compare.sh tests/data_seq/grid_seq.csv tests/data_omp/grid_seq.csv
+```
+
+ESte código fue empezando desde 2000 puntos hasta 20000 Obteniendo un rendimiento lineal pero en promedio 4 o 5 veces más rápido en cálculos la parte secuencial y paralela:
+
 ## Conclusiones
 
+- **La paralelización sí paga**: con 50 000 puntos se obtuvo \~**7× de speed-up** frente a la versión secuencial; el beneficio crece con N e imágenes grandes.
+- **El cuello de botella está en el barrido de píxeles y NN**: asignar cada muestra a su stipple y acumular centroides domina el tiempo; la grilla uniforme reduce drásticamente k (vecinos inspeccionados).
+- **`reduction` > `critical/atomic`**: las acumulaciones por celda escalan bien; los bloqueos finos penalizan.
+- **Localidad importa**: tiling y arreglos contiguos mejoran caché/vec. SIMD; listas enlazadas degradan rendimiento.
+- **`pixelStride` y `gamma` controlan costo/calidad**: pasos grandes aceleran fases tempranas; paso fino al final mejora detalle.
+- **La calidad converge**: con Lloyd ponderado y muestreo bilineal (luma lineal) se obtienen distribuciones visualmente estables y acordes a la densidad de la imagen.
+
 ## Recomendaciones
+
+- Utilizar una semilla para las pruebas para evitar falsos negativos.
+- Se puede comparar otras operaciones que ocurren con el algoritmo tales como gamma como sobreado, radio de puntos maximos y mínimos para ver el comportamiento del algoritmo e incluso el color.
