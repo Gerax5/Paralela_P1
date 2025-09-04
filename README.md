@@ -50,21 +50,21 @@ make
 STIPPLE_PARALLEL=1 OMP_NUM_THREADS=$(nproc) ./build/bin/stippling_demo -n 5000
 ```
 
-- `-n 5000` → número de puntos iniciales (opcional).
+- `-n 5000` -> número de puntos iniciales (opcional).
 - Si omites la imagen, usa la ruta por defecto de `include/config.h` (`defaultImagePath`).
 
 **Controles (teclado):**
 
-- `SPACE` → una iteración de Lloyd
-- `A` → auto-run ON/OFF
-- `-` / `+` (también keypad) → disminuir/aumentar `step` (pixelStride)
-- `G` / `H` → subir/bajar `gamma`
-- `B` → mostrar/ocultar fondo (imagen)
-- `Z` / `X` → radio de punto -/+
-- `R` → resembrar puntos (misma N, nueva semilla)
-- `P` → guardar screenshot PNG del frame actual (en `images/output/`)
-- `U` / `O` → anterior/siguiente `fondo`
-- `ESC` → salir
+- `SPACE` -> una iteración de Lloyd
+- `A` -> auto-run ON/OFF
+- `-` / `+` (también keypad) -> disminuir/aumentar `step` (pixelStride)
+- `G` / `H` -> subir/bajar `gamma`
+- `B` -> mostrar/ocultar fondo (imagen)
+- `Z` / `X` -> radio de punto -/+
+- `R` -> resembrar puntos (misma N, nueva semilla)
+- `P` -> guardar screenshot PNG del frame actual (en `images/output/`)
+- `U` / `O` -> anterior/siguiente `fondo`
+- `ESC` -> salir
 
 **Salidas:**
 
@@ -149,7 +149,7 @@ En el CSV verás cómo `gamma` cambia en las filas correspondientes.
 
 ## Notas técnicas
 
-- Muestreo de luminancia **bilineal** en UV + conversión **sRGB → lineal** para ponderar correctamente.
+- Muestreo de luminancia **bilineal** en UV + conversión **sRGB -> lineal** para ponderar correctamente.
 - Búsqueda de vecino más cercano acelerada con **grilla uniforme**.
 - `step` controla el stride de muestreo (mayor = más rápido, menos preciso).
 - `gamma > 1` acentúa sombras (más puntos en zonas oscuras).
