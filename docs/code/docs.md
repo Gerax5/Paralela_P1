@@ -1,11 +1,3 @@
-# Proyecto 1 Computación Paralela - Algoritmo "Voronoi-Lloyd-Stippling"
-
-## Integrantes
-
-- Gabriel Pineda
-- Josué Say
-- Pablo López
-
 ## Índice
 
 - [Algoritmo Matemático: Voronoi Stippling](#algoritmo-matemático-voronoi-stippling)
@@ -211,129 +203,81 @@ En el contexto de tu proyecto de **paralela con OpenMP**, el reto es:
 
 ## 1. Secuencial vs. Paralelizable
 
-### Secuencial (no paralelizable)
+### Secuencial
 
-- **Lectura de la imagen de entrada** y conversión a escala de grises → paso único, depende de librerías externas.
-- **Inicialización de puntos aleatorios** (semilla inicial). Necesita un orden controlado para reproducibilidad.
-- **Actualización global de parámetros** (convergencia, control de iteraciones, ajuste de radios).
-- **Sincronización final de cada iteración** → debe esperar a que todos los hilos terminen antes de avanzar.
+- **Lectura y preprocesamiento de la imagen**:
+  Conversión a formato homogéneo (`RGBA32`) y cálculo de luminancia Rec.709 en espacio lineal. Es un paso único, dependiente de SDL/SDL_image.
 
-### Paralelizable (candidatos fuertes)
+- **Inicialización de puntos**:
+  Distribución uniforme pseudoaleatoria vía LCG. Determinista (misma semilla → misma nube).
 
-- **Cálculo del diagrama de Voronoi:**
-  
-  Evaluar para cada píxel qué punto (stipple) le corresponde → altamente paralelizable (SIMD/MIMD).
+- **Iteración de Lloyd (barrido secuencial)**:
 
-- **Cálculo de centroides ponderados:**
+  - Se recorre el canvas en pasos de `step` píxeles.
+  - Para cada muestra se calcula luminancia → peso $w = (1 - \text{lum})^\gamma$ o $w = (\text{lum})^\gamma$.
+  - Se busca el vecino más cercano (grilla uniforme con fallback O(N)).
+  - Se acumulan sumatorias (`sumX`, `sumY`, `sumW`) de manera secuencial.
+  - Al final, cada punto se mueve a su centroide.
 
-  Sumar coordenadas de píxeles en cada celda, aplicando peso según intensidad de la imagen. Cada celda puede acumularse en paralelo.
+- **Sincronización natural**:
+  Al ser secuencial, no existen condiciones de carrera. Solo al final de cada iteración se actualizan las posiciones.
 
-- **Reubicación de puntos (Lloyd’s algorithm):**
+### Paralelizable
 
-  Puede hacerse en paralelo por cada punto.
+- **Barrido del canvas**:
+  El doble bucle `(y,x)` se paraleliza con `#pragma omp parallel for`. Cada hilo procesa subconjuntos de píxeles.
 
-- **Escalamiento de radios y anisotropía:**
+- **Buffers privados por hilo**:
+  Para evitar *race conditions*, cada hilo mantiene su propio arreglo de acumuladores (`sumX`, `sumY`, `sumW`) y al final se realiza una **reducción explícita** combinando resultados.
 
-  Cada stipple aplica su propio factor → paralelismo por dato.
+- **Reubicación de puntos**:
+  La actualización de cada punto al centroide es independiente → puede hacerse también en paralelo.
 
 ## 2. Estrategias de paralelización
 
-- **Paralelismo de datos (SIMD + MIMD)**:
-  Cada píxel del área de la imagen puede evaluarse en paralelo para asignarse a un punto Voronoi.
-  
-  → Justificación: el cálculo es independiente por píxel.
+- **Paralelismo de datos (MIMD):**
+  Cada muestra de la imagen se procesa de forma independiente → ideal para `parallel for`.
 
-- **Reducciones en paralelo:**
-  Para calcular centroides se necesitan sumatorias → usar `reduction(+:var)` de OpenMP.
-  
-  → Justificación: evita condiciones de carrera y es más eficiente que `critical`.
+- **Reducciones manuales:**
+  En lugar de usar `reduction(+:var)` directo, el diseño usa buffers por hilo y luego combina resultados → más control y mejor escalabilidad cuando `N` es grande.
 
-- **Paralelismo por tareas (OpenMP sections):**
-  Diferentes fases (dibujar puntos, dibujar líneas, guardar resultados) pueden dividirse en secciones si se procesan en la misma iteración.
-  
-  → Justificación: balancea cómputo heterogéneo.
+- **Uso de índices espaciales (grilla uniforme):**
+  Reduce el número de comparaciones para *nearest neighbor*, mejorando el rendimiento tanto en la versión secuencial como en paralelo.
 
 ## 3. Directivas de OpenMP y estructuras de datos
 
-- **Regiones paralelas por bucle:**
+- **Paralelismo por bucle:**
 
   ```c
-  #pragma omp parallel for schedule(dynamic) reduction(+:sumX, sumY, count)
-  for (int i = 0; i < pixels; i++) { ... }
-  ```
-
-  - `parallel for`: distribuir iteraciones de cálculo de celdas.
-  - `reduction`: acumular coordenadas sin race conditions.
-  - `schedule(dynamic)`: balancea carga porque algunas celdas tendrán más píxeles que otras.
-
-- **Secciones para tareas diferenciadas:**
-
-  ```c
-  #pragma omp parallel sections
-  {
-    #pragma omp section
-    render_points();
-    #pragma omp section
-    render_voronoi();
+  #pragma omp parallel for schedule(static)
+  for (int y = 0; y < H; y += step) {
+      for (int x = 0; x < W; x += step) {
+          // cálculo de luminancia + peso
+          // búsqueda de vecino más cercano
+          // acumulación en buffers privados
+      }
   }
   ```
 
-  - Justificación: separa lógica de renderizado y cálculo.
+- **Estructuras de datos:**
 
-- **Estructuras de datos recomendadas:**
+  - Arreglos planos (`double* sumX, sumY, sumW`) de tamaño `N`.
+  - Buffers replicados por hilo (`T x N`), luego reducidos al final.
+  - Grilla uniforme (`UniformGrid`) para acelerar consultas NN.
 
-  - Arreglos contiguos (`float*`, `int*`) para centroides y acumuladores → favorece vectorización SIMD.
-  - Buffers temporales por hilo (`private`) para evitar bloqueos.
-  - Uso de `reduction` en vez de `critical` o `atomic` para sumar intensidades.
+## 4. Justificación técnica
 
-## 4. Posibles mejoras de diseño
+- **Por qué `parallel for` en el barrido:**
+  El cálculo de luminancia y asignación Voronoi es homogéneo y repetitivo, ideal para repartir entre hilos.
 
-- **Bloques de imagen (tiling):** dividir la imagen en regiones cuadradas → cada hilo procesa un bloque completo de píxeles. Reduce cache misses.
-- **Vectorización:** aprovechar SIMD (SSE/AVX) para calcular distancias cuadradas `(dx*dx + dy*dy)` en batch.
-- **Incremental refinement:** iniciar con menos puntos y aumentarlos gradualmente (como sugiere la doc de Hufstedler). Esto reduce el coste inicial y escala mejor en paralelo.
-- **Uso de `guided schedule`:** en fases iniciales donde hay muchos puntos pesados, reduce overhead dinámico.
+- **Por qué buffers privados por hilo:**
+  Evitan bloqueos y *false sharing*. La reducción final es lineal y no afecta la escalabilidad.
 
-## 5. Justificación técnica
+- **Por qué arreglos contiguos:**
+  El acceso secuencial favorece caché y permite vectorización automática.
 
-- **Por qué `parallel for` y no `sections` para el Voronoi:**
-
-  El cálculo de distancias y asignación es homogéneo y masivo, ideal para dividir iteraciones.
-
-- **Por qué `reduction` y no `critical`:**
-
-  `critical` genera un cuello de botella en acumulaciones. `reduction` escala mucho mejor porque combina resultados al final.
-
-- **Por qué datos contiguos y no listas enlazadas:**
-
-  El acceso aleatorio penaliza el rendimiento en paralelo. Arreglos lineales favorecen cache y SIMD.
-
-- **Por qué iniciar con tiling:**
-
-  Permite aprovechar coherencia espacial, especialmente en imágenes grandes.
-
-## Ejemplo práctico de paralelización
-
-```c
-#pragma omp parallel for schedule(dynamic) reduction(+:cx, cy, w)
-for (int y = 0; y < H; y++) {
-    for (int x = 0; x < W; x++) {
-        int nearest = find_nearest_stipple(x,y,stipples);
-        float weight = 1.0f - image[y][x]; // oscuridad
-        cx[nearest] += x * weight;
-        cy[nearest] += y * weight;
-        w[nearest]  += weight;
-    }
-}
-```
-
-- Cada hilo calcula asignaciones independientes.
-- Reducciones acumulan resultados por celda.
-- Posteriormente, los puntos se actualizan con:
-
-  ```c
-  px[i] = cx[i]/w[i];
-  py[i] = cy[i]/w[i];
-  ```
+- **Por qué grilla uniforme:**
+  Reduce el costo de búsqueda de $O(N)$ a $O(k)$, donde $k$ ≪ $N$.
 
 # API de headers – Voronoi Stippling
 
@@ -1362,8 +1306,6 @@ ESte código fue empezando desde 2000 puntos hasta 20000 Obteniendo un rendimien
 
 - **La paralelización sí paga**: con 50 000 puntos se obtuvo \~**7× de speed-up** frente a la versión secuencial; el beneficio crece con N e imágenes grandes.
 - **El cuello de botella está en el barrido de píxeles y NN**: asignar cada muestra a su stipple y acumular centroides domina el tiempo; la grilla uniforme reduce drásticamente k (vecinos inspeccionados).
-- **`reduction` > `critical/atomic`**: las acumulaciones por celda escalan bien; los bloqueos finos penalizan.
-- **Localidad importa**: tiling y arreglos contiguos mejoran caché/vec. SIMD; listas enlazadas degradan rendimiento.
 - **`pixelStride` y `gamma` controlan costo/calidad**: pasos grandes aceleran fases tempranas; paso fino al final mejora detalle.
 - **La calidad converge**: con Lloyd ponderado y muestreo bilineal (luma lineal) se obtienen distribuciones visualmente estables y acordes a la densidad de la imagen.
 
@@ -1371,3 +1313,7 @@ ESte código fue empezando desde 2000 puntos hasta 20000 Obteniendo un rendimien
 
 - Utilizar una semilla para las pruebas para evitar falsos negativos.
 - Se puede comparar otras operaciones que ocurren con el algoritmo tales como gamma como sobreado, radio de puntos maximos y mínimos para ver el comportamiento del algoritmo e incluso el color.
+- Para mejorar el algoritmo se puede migrar a `reduction(+:sumX[i], sumY[i], sumW[i])` cuando el compilador lo soporte eficientemente.
+- Procesar bloques rectangulares de la imagen por hilo → mejor uso de caché.
+- Vectorización SIMD a la operación de distancia cuadrada `(dx*dx + dy*dy)` para múltiples candidatos en batch.
+- Balance dinámico (`schedule(dynamic)` o `guided`) si el peso de procesamiento no es uniforme (zonas con más puntos cercanos).

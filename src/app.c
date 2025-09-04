@@ -926,15 +926,15 @@ void appRun(App *app)
       app->bgTimer += dt;
       if (app->bgTimer >= app->bgPeriod)
       {
-        // app->bgTimer = 0.0;
-        // appNextBackground(app);
+        app->bgTimer = 0.0;
+        appNextBackground(app);
 
-        // int n = app->stip.count;
-        // stipplingFree(&app->stip);
-        // stipplingInit(&app->stip, n, app->w, app->h, ++app->seed);
+        int n = app->stip.count;
+        stipplingFree(&app->stip);
+        stipplingInit(&app->stip, n, app->w, app->h, ++app->seed);
 
-        // app->iters = 0;
-        // updateFpsTitle(app);
+        app->iters = 0;
+        updateFpsTitle(app);
       }
     }
 
