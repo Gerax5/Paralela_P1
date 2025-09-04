@@ -22,7 +22,7 @@ sudo apt-get install -y build-essential libsdl2-dev libsdl2-image-dev fonts-jetb
 
 ```bash
 mkdir -p build/bin
-gcc -std=c11 -O2 -Wall -Wextra -D_POSIX_C_SOURCE=200809L src/main.c src/app.c src/image.c src/stippling.c src/lloyd.c src/voronoi.c src/utils.c -Iinclude $(sdl2-config --cflags) $(pkg-config --cflags SDL2_image SDL2_ttf) -o build/bin/stippling_demo $(sdl2-config --libs) $(pkg-config --libs SDL2_image SDL2_ttf) -lm
+gcc -std=c11 -O2 -Wall -Wextra -fopenmp -D_POSIX_C_SOURCE=200809L     src/main.c src/app.c src/image.c src/stippling.c src/lloyd.c src/voronoi.c src/utils.c     -Iinclude     $(sdl2-config --cflags) $(pkg-config --cflags SDL2_image SDL2_ttf)     -o build/bin/stippling_demo     $(sdl2-config --libs) $(pkg-config --libs SDL2_image SDL2_ttf) -l
 ```
 
 > Nota: `-D_POSIX_C_SOURCE=200809L` habilita `strdup` en GCC/GLIBC.
