@@ -277,7 +277,7 @@ En el contexto de tu proyecto de **paralela con OpenMP**, el reto es:
   El acceso secuencial favorece caché y permite vectorización automática.
 
 - **Por qué grilla uniforme:**
-  Reduce el costo de búsqueda de $O(N)$ a $O(k)$, donde $k$ ≪ $N$.
+  Reduce el costo de búsqueda de $O(N)$ a $O(k)$, donde $k$ << $N$.
 
 # API de headers – Voronoi Stippling
 
