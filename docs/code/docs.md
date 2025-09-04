@@ -18,8 +18,11 @@
 - [Documentación de código: Stippling](#stipplingc--documentación-del-módulo)
 - [Documentación de código: Image](#imagec--carga-y-muestreo-de-imágenes)
 - [Documentación de código: Utils](#utilsc--utilidades-de-fs-tiempo-y-csv)
+- [Resultados, Conclusiones y Recomendaciones](#resultados)
 
 ## Introducción
+
+Este proyecto implementa Voronoi–Lloyd Stippling, una técnica que aproxima imágenes usando nubes de puntos cuya densidad refleja la luminancia. Partiendo de puntos iniciales aleatorios, en cada iteración se construye un diagrama de Voronoi, se calcula el centro de masa ponderado por la imagen y se reubican los puntos (algoritmo de Lloyd), hasta converger a una distribución estable y estética. Para acelerar el proceso en imágenes grandes y con muchos puntos, se aplica paralelización con OpenMP: el barrido de píxeles, las asignaciones al vecino más cercano (aceleradas con una grilla uniforme) y las reducciones para centroides se ejecutan en paralelo, logrando mejoras de rendimiento significativas sin sacrificar calidad visual. El resultado es un render "estippling" controlable (stride, gamma, radios) y reproducible, adecuado para visualización interactiva y experimentación.
 
 ![Flujo de trabajo](./workflow.jpg)
 
@@ -89,7 +92,7 @@ Para mantener la "oscuridad total" igual a la densidad visual, se escala uniform
 Así la densidad de puntos representa la luminosidad de la imagen.
 ([Extra Polynymous][1])
 
-## 8. Versión escalonada (“Better implementation”)
+## 8. Versión escalonada ("Better implementation")
 
 1. Partir con campos iniciales $R_0(x,y), \theta_0(x,y), \alpha_0(x,y)$ y una imagen $I_0$ de área $A_0$.
 2. Establecer un número objetivo de puntos $N_f$.
@@ -172,7 +175,7 @@ Para lograr esto de manera algorítmica, se combina:
 
 - **Distribución final de puntos** (coordenadas 2D).
 - Imagen stippled que aproxima la forma o gradientes de la imagen de entrada.
-- En versión animada (*screensaver*), se visualiza la evolución iterativa (los puntos “se deslizan” hacia posiciones más uniformes/densas según la imagen).
+- En versión animada (*screensaver*), se visualiza la evolución iterativa (los puntos "se deslizan" hacia posiciones más uniformes/densas según la imagen).
 
 ## Variantes importantes
 
@@ -199,7 +202,7 @@ En el contexto de tu proyecto de **paralela con OpenMP**, el reto es:
 
 ## Referencias útiles
 
-- [Esteban Hufstedler: *Modified Voronoi Diagrams and Stippling*](https://estebanhufstedler.com/2020/01/11/modfied-voronoi-diagrams-and-stippling/) (conceptos de Lloyd, Weighted, Anisotropy)【source】
+- [Esteban Hufstedler: *Modified Voronoi Diagrams and Stippling*](https://estebanhufstedler.com/2020/01/11/modfied-voronoi-diagrams-and-stippling/) (conceptos de Lloyd, Weighted, Anisotropy)
 - [Mike Bostock – ObservableHQ: *Voronoi Stippling*](https://observablehq.com/@mbostock/voronoi-stippling) (visualización interactiva paso a paso).
 - [The Coding Train (Challenge #181 – Image Stippling)](https://thecodingtrain.com/challenges/181-image-stippling): explicación pedagógica y animada.
 - [Repositorio de referencia en JS](https://github.com/smallwhale1/voronoi-stippling?tab=readme-ov-file)
@@ -474,7 +477,7 @@ typedef struct {
 bool stipplingInit(Stippling *s, int n, int w, int h, unsigned seed);
 void stipplingFree(Stippling *s);
 
-/* Render “estilizado”: radio por brillo y color opcional de la imagen */
+/* Render "estilizado": radio por brillo y color opcional de la imagen */
 void stipplingRenderStyled(const Stippling *s, SDL_Renderer *ren, int canvasW, int canvasH,
                            const Image *img, float minR, float maxR,
                            bool useColor, bool invertTheme);
@@ -620,7 +623,7 @@ struct App {
 **Notas:**
 
 - Los recursos viven entre `appInit` y `appShutdown`.
-- `minRadius/maxRadius`, `colorPoints`, `invertTheme` afectan el render “estilizado”.
+- `minRadius/maxRadius`, `colorPoints`, `invertTheme` afectan el render "estilizado".
 - `metricsPath`, `maxIters` y el *sweep* de gamma permiten ejecuciones batch con logging.
 
 ## Inicialización — `appInit`
@@ -724,7 +727,7 @@ Idempotente a nivel de punteros internos; no-op si `app == NULL`.
 - `image.c`: carga y muestreo (luminancia/ RGB bilineal).
 - `lloyd.c`: paso de Lloyd con ponderación por oscuridad y reseed de huérfanos.
 - `voronoi.c`: *UniformGrid* para acelerar NN.
-- `stippling.c`: estado y render (incluye versión “estilizada” por brillo/color).
+- `stippling.c`: estado y render (incluye versión "estilizada" por brillo/color).
 
 ## Parámetros clave en runtime
 
@@ -768,7 +771,7 @@ bool lloydStep(const Image *img,
 La función soporta dos esquemas, seleccionables en compilación:
 
 ```c
-// 1 = por brillo (modo “debug/nativo”), 0 = por oscuridad (modo clásico)
+// 1 = por brillo (modo "debug/nativo"), 0 = por oscuridad (modo clásico)
 #ifndef STIPPLE_WEIGHT_BY_BRIGHTNESS
 #define STIPPLE_WEIGHT_BY_BRIGHTNESS 1
 #endif
@@ -1187,7 +1190,7 @@ Retorna `0.0f` si la imagen no es válida.
 ### `void sampleRgbBilinearUV(const Image *img, float u, float v, Uint8 *r, Uint8 *g, Uint8 *b)`
 
 Muestrea **color sRGB** por bilineal en `u,v ∈ [0,1]` y escribe `r,g,b ∈ [0..255]`.
-Interpolación realizada en espacio sRGB (rápida; suficiente para “tintar” puntos).
+Interpolación realizada en espacio sRGB (rápida; suficiente para "tintar" puntos).
 Si la imagen/parámetros no son válidos, escribe `0,0,0`.
 
 ## Errores y retorno
@@ -1322,7 +1325,7 @@ util_csv_append("images/output/seq/metrics.csv",
                 it, ms, step, gamma, npoints);
 ```
 
-# Pruebas
+# Resultados
 
 Las pruebas fueron realizadas aumentando la cantidad de puntos que se hicieron para renderizar la imagen y aplicar el algoritmo voronoi stippling. Como nota se quiere agregar se utilizó la primera máquina, las carácteristicas se describen a continuación.
 
@@ -1352,6 +1355,8 @@ STIPPLE_PARALLEL=1 OMP_NUM_THREADS=20 ./tests/run_grid.sh -i images/input/twitch
 ```
 
 ESte código fue empezando desde 2000 puntos hasta 20000 Obteniendo un rendimiento lineal pero en promedio 4 o 5 veces más rápido en cálculos la parte secuencial y paralela:
+
+![Resultados](./results.png)
 
 ## Conclusiones
 
