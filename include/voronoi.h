@@ -44,6 +44,11 @@ typedef struct
    */
   int *head;
   int *next;
+
+  // --- CSR (nuevo)
+  int *cellCount;   // H (= cols*rows)
+  int *cellOffset;  // H+1 (prefix sum exclusivo)
+  int *cellPoints;  // N (indices de puntos contiguos por celda)
 } UniformGrid;
 
 /**

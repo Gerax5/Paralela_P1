@@ -81,7 +81,7 @@ Dibuja la nube con **radio por-punto** mapeado desde la **luminancia** de la ima
 
   - UV del canvas a la imagen: `u=(x+0.5)/canvasW`, `v=(y+0.5)/canvasH`.
   - Luminancia bilineal **en lineal** (Rec.709) con `sampleIntensityBilinearUV`.
-  - Radio: `r = lerp(minR, maxR, 1 - lum)` → claro ⇒ pequeño; oscuro ⇒ grande.
+  - Radio: `r = lerp(minR, maxR, 1 - lum)` → claro => pequeño; oscuro => grande.
   - Color:
 
     - `useColor == false` → usa color base (tema).
@@ -90,7 +90,7 @@ Dibuja la nube con **radio por-punto** mapeado desde la **luminancia** de la ima
 
 **Consideraciones:**
 
-- Si `img` es `NULL` o inválida, `lum = 0` ⇒ todos los radios \~`maxR` (tema base aplica).
+- Si `img` es `NULL` o inválida, `lum = 0` => todos los radios \~`maxR` (tema base aplica).
 - Complejidad de dibujo ≈ `O(Σ_i r_i)` (unas `2*r + 1` líneas por punto).
 - Cambia el color del renderer varias veces; no modifica blending mode.
 - No llama a `SDL_RenderPresent` ni limpia el fondo.
