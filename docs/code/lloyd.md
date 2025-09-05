@@ -1,91 +1,88 @@
-# `lloyd.c` — Iteración de Lloyd ponderada por imagen
+# `lloyd.c` — Documentación técnica
 
-Este módulo ejecuta **una iteración** del algoritmo de Lloyd (Centroidal Voronoi) para *Voronoi Stippling* usando la imagen como campo de densidad. Cada punto se desplaza al **centro de masa** de su región, ponderando por luminancia.
+## Rol del módulo
 
-## Firma
+Ejecuta **una iteración** del algoritmo de Lloyd (Centroidal Voronoi) para *Voronoi Stippling*: mueve cada punto al **centro de masa ponderado por la imagen** (luminancia). La API pública expuesta en `lloyd.h` es `lloydStep(...)`.
 
-```c
-bool lloydStep(const Image *img,
-               Stippling *s,
-               int W, int H,
-               int step,
-               float gamma);
-```
+**Modo de peso (compile-time):**
 
-- `img`  → imagen fuente (RGBA32). La luminancia se muestrea en UV con **bilineal** (en lineal, ver `image.c`).
-- `s`    → nube de puntos a modificar in-place.
-- `W,H`  → dimensiones del canvas (en píxeles).
-- `step` → stride de muestreo del canvas (≥ 1). Mayor = más rápido, menos fino.
-- `gamma`→ exponente del peso (ver más abajo).
+- `STIPPLE_WEIGHT_BY_BRIGHTNESS=1` -> `w = (lum)^gamma` (favorece zonas **claras**).
+- `STIPPLE_WEIGHT_BY_BRIGHTNESS=0` -> `w = (1 - lum)^gamma` (favorece **oscuras**).&#x20;
 
-**Retorna** `true` si se ejecutó la iteración; `false` ante parámetros inválidos o fallo de memoria temporal.
+La luminancia proviene de muestreo **bilineal** en UV con conversión sRGB->lineal usando Rec.709.&#x20;
 
-## Modo de ponderación (compile-time)
+## Convenciones del módulo
 
-La función soporta dos esquemas, seleccionables en compilación:
+- Coordenadas en píxel (origen arriba-izquierda), rangos válidos `x∈[0,w)`, `y∈[0,h)`.&#x20;
+- `pixelStride >= 1` controla granularidad/costo de muestreo; mayor = más rápido/menos preciso.&#x20;
+- La implementación **modifica** `Stippling` *in-place* y por sí sola no es thread-safe; la versión paralela usa OpenMP con acumuladores por hilo y reducción.
 
-```c
-// 1 = por brillo (modo “debug/nativo”), 0 = por oscuridad (modo clásico)
-#ifndef STIPPLE_WEIGHT_BY_BRIGHTNESS
-#define STIPPLE_WEIGHT_BY_BRIGHTNESS 1
-#endif
-```
+## Flujo (secuencial)
 
-- **Brillo (nativo/debug):** `w = (lum)^gamma`
-  Favorece zonas **claras**.
-- **Oscuridad (clásico):** `w = (1 - lum)^gamma`
-  Favorece zonas **oscuras**.
+1. **Validación** de entradas (`img`, `s`, dimensiones, `step`).&#x20;
+2. **Construcción de grilla uniforme** (`UniformGrid`, `cell=32`) para acelerar *nearest neighbor*.&#x20;
+3. **Acumuladores** por punto `sumX/sumY/sumW` en `double`.&#x20;
+4. **Barrido** del lienzo cada `step`:
 
-`gamma > 1` enfatiza el modo elegido; `gamma < 1` lo atenúa.
+   - `(x,y)->(u,v)` centrado del píxel, muestrear `lum` (bilineal).
+   - Calcular `w` con el modo activo (`lum^gamma` o `(1-lum)^gamma`).
+   - NN con grilla; si falla, **fallback O(N)**.
+   - Acumular `(x*w, y*w, w)` en el punto ganador.&#x20;
+5. **Actualizar** puntos con su centroide si `sumW>0`.&#x20;
+6. **Reseed de huérfanos** (`sumW==0`): hasta 64 intentos en zonas con `w>1e-6`.&#x20;
 
-> Nota: la luminancia `lum` proviene de `sampleIntensityBilinearUV`, que convierte sRGB→lineal y aplica Rec.709 antes de interpolar.
+**Complejidad aprox.**
+`O((W/step * H/step) * k)`; `k` = puntos inspeccionados por la grilla.&#x20;
 
-## Flujo interno
+## Flujo (paralelo con OpenMP)
 
-1. **Validación** de entradas.
-2. **Grilla uniforme** (`UniformGrid`) para acelerar *nearest neighbor*; cell=32 px.
-3. **Acumuladores** por punto: `sumX`, `sumY`, `sumW` en `double`.
-4. **Barrido** del canvas cada `step`:
+La API es la **misma** (`lloydStep`); la implementación usa:
 
-   - Convertir `(x,y)` → `(u,v)` centrado en el píxel.
-   - Muestrear `lum` con **bilineal**.
-   - Calcular `w` según macro (brillo u oscuridad) y `gamma`.
-   - Buscar **punto más cercano** con la grilla (`ringMax=2`); si no hay candidatos, fallback O(N).
-   - Acumular `(x*w, y*w, w)` en el punto ganador.
-5. **Actualizar** cada punto con su centroide si `sumW[i] > 0`.
-6. **Reseed** de huérfanos (`sumW == 0`): elegir hasta 64 posiciones aleatorias con `w > 1e-6`.
-7. **Liberar** buffers y grilla.
+- **Buffers locales por hilo** `sumXlocal/sumYlocal/sumWlocal` (tamaño `T×N`) para evitar carreras.
+- Un `#pragma omp for collapse(2)` sobre el doble bucle `y/x`.
+- **Reducción manual**: sumar locales -> globales.
 
-## Complejidad
+Búsqueda NN con grilla (`ringMax=2`), con fallback O(N) si no hay candidatos, igual que en la versión secuencial.&#x20;
 
-```bash
-O( (W/step * H/step) * k )
-```
+Luego:
 
-donde `k` es la cantidad de puntos inspeccionados por la grilla (pequeña con `ringMax` bajo).
-`step` reduce linealmente el coste del barrido.
+- **Actualización** de puntos para `sumW>0`.
+- **Reseed** determinista de huérfanos (semilla derivada de `n^W^H + 0x9E3779B9`, hasta 64 intentos).
+- **Liberación** de buffers y grilla.
 
-## Detalles numéricos
+## Mecanismos de sincronía
 
-- Acumulación en `double`; posiciones de puntos en `float`.
-- Muestreo de luminancia en **lineal** (sRGB→lineal + Rec.709) dentro de `image.c`.
-- La grilla se reconstruye en cada iteración (los puntos se mueven).
+- Paralelismo de *loop-level* (OpenMP).
+- Evita *atomics* en el inner loop: **acumulación privada** por hilo y **reducción** posterior -> sin contención.&#x20;
 
-## Reseed de huérfanos
+## Programación defensiva / robustez
 
-Para puntos sin asignaciones (`sumW==0`):
+- Chequeos de punteros, dimensiones y `step`.
+- Fallback a O(N) si la grilla no devuelve candidato.
+- Re-sembrado de huérfanos para evitar colapsos de celdas vacías.
 
-- Semilla reproducible: `(n ^ W ^ H) + 0x9E3779B9`.
-- Hasta 64 intentos; se acepta el primer `(rx,ry)` con `w > 1e-6`.
+## Despliegue de resultados
 
-## Consideraciones prácticas
+Este módulo **no renderiza**; solo actualiza `s->pts[i].(x,y)`. El render ocurre en `stipplingRenderStyled(...)` desde `stippling.c`.&#x20;
 
-- Iteraciones tempranas: `step = 3..4` acelera; al final, refinar con `step = 1`.
-- `gamma` típico: `1.0..1.6` (ajustar según el modo de peso deseado).
-- Si compilas con `STIPPLE_WEIGHT_BY_BRIGHTNESS=1`, el resultado tenderá a **zonas claras**; con `0`, a **zonas oscuras**.
+### `bool lloydStep(const Image *img, Stippling *s, int w, int h, int pixelStride, float gamma);`
 
-## Interacción con otros módulos
+- **Entradas**
 
-- `image.c` → `sampleIntensityBilinearUV` (bilineal en UV, lineal/Rec.709).
-- `voronoi.c` → `gridBuild`, `gridNearest`, `gridFree`.
-- `stippling.c` → estructura y almacenamiento de puntos.
+  - `img` (`const Image*`): fuente de luminancia Rec.709 en `[0..1]` (UV bilineal, sRGB->lineal).
+  - `s` (`Stippling*`): nube de puntos (modificada in-place).
+  - `w,h` (`int`): dimensiones del lienzo (px).
+  - `pixelStride` (`int`): salto de muestreo (`k>=1`).
+  - `gamma` (`float`): exponente del peso (`lum^gamma` o `(1-lum)^gamma` según macro).&#x20;
+- **Salidas**
+
+  - `bool`: `true` si la iteración completó; `false` si entradas inválidas o error.&#x20;
+- **Descripción (funcionamiento)**
+  Muestrea el lienzo cada `pixelStride`, asigna cada muestra a su punto más cercano (grilla uniforme + fallback), acumula centroide ponderado por `w` y actualiza cada punto a su centro de masa. Maneja puntos **huérfanos** mediante re-sembrado probabilístico en zonas con peso. Coste aprox. `O((W/stride * H/stride) * k)`.
+
+**Pre/Postcondiciones resumidas (del header):**
+`img!=NULL`, `s!=NULL`, `s->count>0`, `w,h>0`, `pixelStride>=1`; al finalizar, los puntos se reubican hacia sus centroides ponderados.&#x20;
+
+## Notas de implementación
+
+- RNG ligero (LCG) + `irand_range` para re-seed; determinista a igualdad de semilla. *(Detalles en `lloyd.c`/`lloyd_parallel.c`)*.

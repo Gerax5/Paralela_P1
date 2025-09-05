@@ -24,7 +24,7 @@
 │   ├── image.c             # carga PNG/JPG (SDL2_image) y muestreo
 │   ├── lloyd.c             # centros de masa ponderados
 │   ├── stippling.c         # estado de puntos, radios, init
-│   ├── voronoi.c           # asignación píxel→punto (tileado)
+│   ├── voronoi.c           # asignación píxel->punto (tileado)
 │   └── util.c              # timers, clamps, RNG
 ├── images/
 │   ├── input/
@@ -53,11 +53,11 @@
 - **src/**:
 
   - `main.c`: parsea `N` (y opciones), inicia SDL, bucle, muestra FPS.
-  - `app.c`: ejecuta *una iteración* (asignar→acumular→actualizar→render).
+  - `app.c`: ejecuta *una iteración* (asignar->acumular->actualizar->render).
   - `image.c`: carga PNG/JPG (o genera campo sintético), provee `sample(x,y)`.
   - `lloyd.c`: centros de masa ponderados por intensidad.
   - `stippling.c`: init y actualización de puntos (pos/radio).
-  - `voronoi.c`: asignación píxel→stipple (dist mínima; versión tileada).
+  - `voronoi.c`: asignación píxel->stipple (dist mínima; versión tileada).
   - `util.c`: cronómetro de alta resolución, helpers.
 - **images/**:
 
@@ -65,7 +65,7 @@
   - `output/seq|omp`: capturas PNG, CSV de FPS y tiempo.
 - **tests/**:
 
-  - `run_grid.sh`: corre (N={500..10000}) × (hilos={1,2,4,8}) → `perf.csv`.
+  - `run_grid.sh`: corre (N={500..10000}) × (hilos={1,2,4,8}) -> `perf.csv`.
   - `compare.sh`: calcula speedup, eficiencia, promedia 10 corridas.
   - `perf.sh`: lanza baterías y ordena resultados.
 - **build/**:
@@ -172,7 +172,7 @@ clean:
 
 1. **Entrada**: `N` (puntos), imagen opcional (`PNG/JPG`).
 2. **Inicialización**: puntos aleatorios y carga de imagen (`SDL2_image`).
-3. **Iteración Lloyd**: asignación → acumulación → actualización.
+3. **Iteración Lloyd**: asignación -> acumulación -> actualización.
 4. **Render**: puntos y FPS en pantalla.
 5. **Medición**: CSV y capturas en `images/output/seq`.
 
@@ -187,7 +187,7 @@ clean:
 
 ### C. Pruebas
 
-- `tests/run_grid.sh`: barrido N × threads, 10 repeticiones → CSV.
+- `tests/run_grid.sh`: barrido N × threads, 10 repeticiones -> CSV.
 - `tests/compare.sh`: calcula speedup y eficiencia.
 - Resultados guardados en `images/output/`.
 
@@ -195,7 +195,7 @@ clean:
 
 - Correctitud: error medio < ε px entre seq y omp.
 - Rendimiento: FPS, ms/frame, speedup.
-- Requisitos: N param, FPS en pantalla, ≥640×480, Lloyd’s + ponderación.
+- Requisitos: N param, FPS en pantalla, >=640×480, Lloyd’s + ponderación.
 
 ## 6. Checklist final
 
@@ -225,7 +225,7 @@ clean:
 - [ ] **Pruebas:**
 
   - [ ] Scripts de performance. *(\*archivos existen pero sin código)*
-  - [ ] CSV con ≥10 mediciones. *(\*no generado)*
+  - [ ] CSV con >=10 mediciones. *(\*no generado)*
   - [ ] Capturas seq vs omp. *(\*solo tienes secuencial)*
 
 - [ ] **Documentación:**

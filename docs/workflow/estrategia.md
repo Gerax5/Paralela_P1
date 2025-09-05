@@ -4,16 +4,16 @@
 
 ### Secuencial (no paralelizable)
 
-- **Lectura de la imagen de entrada** y conversión a escala de grises → paso único, depende de librerías externas.
+- **Lectura de la imagen de entrada** y conversión a escala de grises -> paso único, depende de librerías externas.
 - **Inicialización de puntos aleatorios** (semilla inicial). Necesita un orden controlado para reproducibilidad.
 - **Actualización global de parámetros** (convergencia, control de iteraciones, ajuste de radios).
-- **Sincronización final de cada iteración** → debe esperar a que todos los hilos terminen antes de avanzar.
+- **Sincronización final de cada iteración** -> debe esperar a que todos los hilos terminen antes de avanzar.
 
 ### Paralelizable (candidatos fuertes)
 
 - **Cálculo del diagrama de Voronoi:**
   
-  Evaluar para cada píxel qué punto (stipple) le corresponde → altamente paralelizable (SIMD/MIMD).
+  Evaluar para cada píxel qué punto (stipple) le corresponde -> altamente paralelizable (SIMD/MIMD).
 
 - **Cálculo de centroides ponderados:**
 
@@ -25,24 +25,24 @@
 
 - **Escalamiento de radios y anisotropía:**
 
-  Cada stipple aplica su propio factor → paralelismo por dato.
+  Cada stipple aplica su propio factor -> paralelismo por dato.
 
 ## 2. Estrategias de paralelización
 
 - **Paralelismo de datos (SIMD + MIMD)**:
   Cada píxel del área de la imagen puede evaluarse en paralelo para asignarse a un punto Voronoi.
   
-  → Justificación: el cálculo es independiente por píxel.
+  -> Justificación: el cálculo es independiente por píxel.
 
 - **Reducciones en paralelo:**
-  Para calcular centroides se necesitan sumatorias → usar `reduction(+:var)` de OpenMP.
+  Para calcular centroides se necesitan sumatorias -> usar `reduction(+:var)` de OpenMP.
   
-  → Justificación: evita condiciones de carrera y es más eficiente que `critical`.
+  -> Justificación: evita condiciones de carrera y es más eficiente que `critical`.
 
 - **Paralelismo por tareas (OpenMP sections):**
   Diferentes fases (dibujar puntos, dibujar líneas, guardar resultados) pueden dividirse en secciones si se procesan en la misma iteración.
   
-  → Justificación: balancea cómputo heterogéneo.
+  -> Justificación: balancea cómputo heterogéneo.
 
 ## 3. Directivas de OpenMP y estructuras de datos
 
@@ -73,13 +73,13 @@
 
 - **Estructuras de datos recomendadas:**
 
-  - Arreglos contiguos (`float*`, `int*`) para centroides y acumuladores → favorece vectorización SIMD.
+  - Arreglos contiguos (`float*`, `int*`) para centroides y acumuladores -> favorece vectorización SIMD.
   - Buffers temporales por hilo (`private`) para evitar bloqueos.
   - Uso de `reduction` en vez de `critical` o `atomic` para sumar intensidades.
 
 ## 4. Posibles mejoras de diseño
 
-- **Bloques de imagen (tiling):** dividir la imagen en regiones cuadradas → cada hilo procesa un bloque completo de píxeles. Reduce cache misses.
+- **Bloques de imagen (tiling):** dividir la imagen en regiones cuadradas -> cada hilo procesa un bloque completo de píxeles. Reduce cache misses.
 - **Vectorización:** aprovechar SIMD (SSE/AVX) para calcular distancias cuadradas `(dx*dx + dy*dy)` en batch.
 - **Incremental refinement:** iniciar con menos puntos y aumentarlos gradualmente (como sugiere la doc de Hufstedler). Esto reduce el coste inicial y escala mejor en paralelo.
 - **Uso de `guided schedule`:** en fases iniciales donde hay muchos puntos pesados, reduce overhead dinámico.

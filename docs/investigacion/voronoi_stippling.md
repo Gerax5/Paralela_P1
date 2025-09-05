@@ -7,9 +7,9 @@ El objetivo es que la **densidad y posición de los puntos** transmitan la estru
 
 Para lograr esto de manera algorítmica, se combina:
 
-- **Diagramas de Voronoi** → dividen el plano en celdas según cercanía a cada punto semilla.
-- **Algoritmo de Lloyd** → ajusta iterativamente la posición de los puntos hacia el **centroide o centro de masa** de su celda Voronoi.
-- **Pesos derivados de la imagen** → las áreas oscuras atraen más puntos, generando mayor densidad (Weighted Voronoi Stippling).
+- **Diagramas de Voronoi** -> dividen el plano en celdas según cercanía a cada punto semilla.
+- **Algoritmo de Lloyd** -> ajusta iterativamente la posición de los puntos hacia el **centroide o centro de masa** de su celda Voronoi.
+- **Pesos derivados de la imagen** -> las áreas oscuras atraen más puntos, generando mayor densidad (Weighted Voronoi Stippling).
 
 ## Parámetros principales del algoritmo
 
@@ -23,7 +23,7 @@ Para lograr esto de manera algorítmica, se combina:
 5. **Pesos/funciones**:
 
    - **Weighted**: ponderación según intensidad (1 − I(x,y)).
-   - **Multiplicatively weighted**: cada punto tiene un factor de escala → permite simular diferentes tamaños de puntos.
+   - **Multiplicatively weighted**: cada punto tiene un factor de escala -> permite simular diferentes tamaños de puntos.
    - **Anisotrópico**: distancias escaladas por un ángulo θ y razón α, para estiramiento direccional.
 
 ## Funcionamiento (flujo básico)
@@ -42,7 +42,7 @@ Para lograr esto de manera algorítmica, se combina:
 
 - **Distribución final de puntos** (coordenadas 2D).
 - Imagen stippled que aproxima la forma o gradientes de la imagen de entrada.
-- En versión animada (*screensaver*), se visualiza la evolución iterativa (los puntos “se deslizan” hacia posiciones más uniformes/densas según la imagen).
+- En versión animada (*screensaver*), se visualiza la evolución iterativa (los puntos "se deslizan" hacia posiciones más uniformes/densas según la imagen).
 
 ## Variantes importantes
 

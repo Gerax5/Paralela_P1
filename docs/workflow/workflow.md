@@ -113,7 +113,7 @@ flowchart TD
       P0 --> P1["omp parallel: buffers locales T×N"]
       P1 --> P2["omp for collapse(2) sobre y/x"]
       P2 --> P3["gridNearest + acumulación por hilo"]
-      P3 --> P4["Reducción T×N → N (sumX/Y/W)"]
+      P3 --> P4["Reducción T×N -> N (sumX/Y/W)"]
       P4 --> P5["Actualiza centroides"]
       P5 --> P6["Sincronía: barrera implícita en omp for"]
     end

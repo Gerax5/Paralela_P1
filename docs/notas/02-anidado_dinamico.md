@@ -93,8 +93,8 @@ int main() {
 
 #### Explicación paso a paso
 
-1. `omp_set_dynamic(1)` → Permite que OpenMP ajuste el número de hilos automáticamente.
-2. `omp_set_num_threads(4)` → Define el número inicial de hilos.
+1. `omp_set_dynamic(1)` -> Permite que OpenMP ajuste el número de hilos automáticamente.
+2. `omp_set_num_threads(4)` -> Define el número inicial de hilos.
 3. `#pragma omp parallel for schedule(dynamic)`
 
    - Reparte las iteraciones dinámicamente entre los hilos.

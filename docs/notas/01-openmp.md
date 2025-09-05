@@ -121,7 +121,7 @@ int main() {
 * Cuando estás haciendo pruebas y quieres comparar el rendimiento con diferente cantidad de hilos.
 
 **Ejemplo en palabras:**
-Imagina que tienes una cocina con 4 personas disponibles, pero solo quieres que 2 cocinen al mismo tiempo para no chocar entre ellas. Esta función sería como dar esa instrucción: “solo 2 personas a la vez”.
+Imagina que tienes una cocina con 4 personas disponibles, pero solo quieres que 2 cocinen al mismo tiempo para no chocar entre ellas. Esta función sería como dar esa instrucción: "solo 2 personas a la vez".
 
 **¿Cuándo *no* usarlo?**
 
@@ -461,7 +461,7 @@ Cuando un hilo cambia una variable y otros deben ver ese cambio inmediatamente.
 **Ejemplo en palabras:**
 Como si un jugador activa un interruptor y los demás deben ver la luz encendida; `flush` asegura que todos vean el cambio.
 
-Este contenido debe agregarse como una **nueva sección al mismo nivel que “Directivas” y “Sincronización”**, con el título:
+Este contenido debe agregarse como una **nueva sección al mismo nivel que "Directivas" y "Sincronización"**, con el título:
 
 ## Variables de Entorno en OpenMP
 
@@ -593,7 +593,7 @@ export OMP_PROC_BIND=spread
 * Cuando quieres **controlar el comportamiento global** de OpenMP sin modificar el código fuente.
 * Para **probar diferentes configuraciones de rendimiento** fácilmente.
 
-Puedes dividir este contenido en dos nuevas **secciones al mismo nivel que “Directivas”, “Sincronización”, y “Variables de Entorno”**, con los títulos:
+Puedes dividir este contenido en dos nuevas **secciones al mismo nivel que "Directivas", "Sincronización", y "Variables de Entorno"**, con los títulos:
 
 ---
 
@@ -629,8 +629,8 @@ int main() {
 
 **¿Qué hace este código?**
 
-* Crea una región paralela con 2 hilos (“outer”).
-* Cada hilo de esa región crea otra región paralela con 2 hilos más (“inner”).
+* Crea una región paralela con 2 hilos ("outer").
+* Cada hilo de esa región crea otra región paralela con 2 hilos más ("inner").
 * En total se ejecutan 4 hilos internos, 2 por cada hilo externo.
 
 **¿Cuándo usarlo?**

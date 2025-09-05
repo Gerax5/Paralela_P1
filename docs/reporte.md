@@ -1,0 +1,1 @@
+<!-- pandoc --from=markdown-implicit_figures   reporte.md -o reporte.pdf   --pdf-engine=xelatex   -V geometry:top=0.67in -V geometry:bottom=0.67in -V geometry:left=0.85in -V geometry:right=0.85in   -H header.tex   --resource-path=.:images:../images -->

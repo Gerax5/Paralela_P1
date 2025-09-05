@@ -64,7 +64,7 @@ Para mantener la "oscuridad total" igual a la densidad visual, se escala uniform
 Así la densidad de puntos representa la luminosidad de la imagen.
 ([Extra Polynymous][1])
 
-## 8. Versión escalonada (“Better implementation”)
+## 8. Versión escalonada ("Better implementation")
 
 1. Partir con campos iniciales $R_0(x,y), \theta_0(x,y), \alpha_0(x,y)$ y una imagen $I_0$ de área $A_0$.
 2. Establecer un número objetivo de puntos $N_f$.

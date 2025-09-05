@@ -30,8 +30,8 @@ Michael J. Flynn clasificó las arquitecturas de computadoras según el **flujo 
 
 **Ejemplo:**
 
-* **SIMD:** procesar cada píxel de una imagen de manera simultánea → ideal para gráficos y visión artificial.
-* **MIMD:** simular el clima global → diferentes nodos calculan distintas regiones del planeta.
+* **SIMD:** procesar cada píxel de una imagen de manera simultánea -> ideal para gráficos y visión artificial.
+* **MIMD:** simular el clima global -> diferentes nodos calculan distintas regiones del planeta.
 
 ## 3. Máquinas paralelas: multiprocesador vs multicomputadora
 
@@ -100,7 +100,7 @@ C = A + B
 4. **Finanzas cuantitativas:** simulaciones Monte Carlo para evaluar riesgos e inversiones.
 
 👉 **Ejemplo financiero (alegoría):**
-En vez de calcular el riesgo de una inversión “persona por persona” como un cajero revisando clientes uno a uno, la programación vectorial lo hace como un sistema automático que procesa **toda la cola de clientes al mismo tiempo**.
+En vez de calcular el riesgo de una inversión "persona por persona" como un cajero revisando clientes uno a uno, la programación vectorial lo hace como un sistema automático que procesa **toda la cola de clientes al mismo tiempo**.
 
 ## 6. Conexión entre programación vectorial y paralelismo
 

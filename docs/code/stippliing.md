@@ -1,132 +1,96 @@
-# `stippling.c` — documentación del módulo
+# `stippling.c` — Documentación técnica
 
-## Propósito
+## Rol del módulo
 
-Mantener la nube de puntos del efecto *stippling* y dibujarla con un tamaño por-punto derivado del **brillo** de una imagen de referencia. El módulo administra memoria de puntos e implementa un render estilado (con radio variable y color opcional).
+Gestiona la **nube de puntos** del puntillismo: creación inicial (siembra pseudoaleatoria en el lienzo) y **render estilizado** (radio por brillo e, opcionalmente, color muestreado de la imagen). La siembra y el render están pensados para alimentar el **algoritmo de Lloyd** y mostrar el resultado en **SDL2**.
 
-## Estructuras
+## Flujo (resumen)
 
-```c
-typedef struct {
-  float x, y;
-} Dot;
+1. **Siembra inicial** (`stipplingInit`): reserva memoria y ubica `n` puntos uniformes en `[0..W)×[0..H)`.
+   - *Secuencial:* LCG 32-bit;
+   - *Paralelo:* *xorshift32* con mezcla determinista por índice/hilo.
+2. **Render** (`stipplingRenderStyled`): por cada punto, calcula UV -> muestrea **luminancia** y (si se pide) **color** de la imagen, calcula radio `r∈[minR,maxR]` y rasteriza un disco mediante scanlines. Debe ejecutarse en el **hilo principal** (SDL no es thread-safe para render).
 
-typedef struct {
-  Dot *pts;     // arreglo de N puntos
-  int  count;   // N
-  int  width;   // ancho del canvas lógico
-  int  height;  // alto del canvas lógico
-} Stippling;
-```
+## Convenciones
 
-**Invariantes:**
+- **Rangos y contratos**
 
-- `pts` es un arreglo de `count` elementos o `NULL` si el estado está vacío.
-- Las coordenadas están en espacio de ventana `[0..width) x [0..height)`.
+  - `n > 0`, `W > 0`, `H > 0`; en caso contrario, `stipplingInit` retorna `false`.
+  - `minR` se clampa internamente a `>=0.5`; `maxR` se clampa a `>=minR`.
+- **Determinismo**
 
-## API pública
+  - Misma **semilla** + mismos **parámetros** ⇒ misma nube inicial.
+  - En OMP, cada punto usa estado RNG **independiente** (mezcla de `seed` + `i`), evitando corridas no deterministas.
+- **Paralelismo y sincronía**
 
-### `bool stipplingInit(Stippling *s, int n, int w, int h, unsigned seed);`
+  - *Init (OMP):* `#pragma omp parallel for schedule(static)`; no hay reducciones ni locks (cada hilo escribe índices disjuntos).
+  - *Render:* llámese **solo** desde el hilo principal (SDL).
+- **Errores/defensiva**
 
-Inicializa el estado con `n` puntos distribuidos aleatoriamente en `[0..w) x [0..h)`.
+  - Si `malloc` falla, no se altera el estado previo; `stipplingFree` es **idempotente** (segura ante múltiples llamadas).
 
-**Parámetros:**
+## Estructuras expuestas (resumen)
 
-- `s` → estado a inicializar (no nulo).
-- `n` → número de puntos (`> 0`).
-- `w, h` → dimensiones del canvas (`> 0`).
-- `seed` → semilla LCG (si `0`, se usa una por defecto).
+> Las definiciones completas viven en `stippling.h`. A partir de las *units* de implementación:
+>
+> - `Dot { float x, y; }` (posición)
+> - `Stippling { Dot *pts; int count, width, height; }` (conjunto y metadatos)
 
-**Retorno:**
+## `bool stipplingInit(Stippling *s, int n, int w, int h, unsigned seed);`
 
-- `true` si se asignó memoria y se generó la nube.
-- `false` si hay parámetros inválidos o falla `malloc`.
+**Entradas:**
 
-**Notas:**
+- `s` (`Stippling*`): salida a inicializar (no `NULL`).
+- `n` (`int`): cantidad de puntos (`>0`).
+- `w, h` (`int`): dimensiones del canvas (`>0`).
+- `seed` (`unsigned`): semilla RNG (si `0`, la impl. usa un default interno).
 
-- Complejidad O(n).
-- En fallo, `s` queda sin inicializar (no se escriben campos).
+**Salidas:**
 
-### `void stipplingFree(Stippling *s);`
+- `bool`: `true` si reserva e inicializa; `false` si parámetros inválidos o `malloc` falla.
 
-Libera la memoria del arreglo de puntos y resetea el estado.
+**Descripción:**
 
-**Parámetros:**
+- Reserva `n` puntos y los ubica **uniformemente** en el rectángulo `[0..w)×[0..h)`.
+- **Secuencial:** usa **LCG** (Numerical Recipes: `state = state*1664525 + 1013904223`) y normaliza con 24 bits altos.
+- **Paralelo (OMP):** `#pragma omp parallel for`, RNG **xorshift32** por punto con semilla mezclada por índice (`0x9E3779B9 ^ seed ^ i*0x85EBCA6B`). Sin sincronización.
 
-- `s` → estado a limpiar. Puede ser `NULL`.
+## `void stipplingFree(Stippling *s);`
 
-**Notas:**
+**Entradas:**
 
-- Idempotente: segura frente a múltiples llamadas.
-- No libera la estructura `Stippling` en sí, solo su contenido.
+- `s` (`Stippling*`): estructura a limpiar (puede ser `NULL`).
 
-### `void stipplingRenderStyled(const Stippling *s, SDL_Renderer *ren, int canvasW, int canvasH, const Image *img, float minR, float maxR, bool useColor, bool invertTheme);`
+**Salidas:**
 
-Dibuja la nube con **radio por-punto** mapeado desde la **luminancia** de la imagen, y opcionalmente colorea cada punto con el **color bilineal** de la imagen.
+**Descripción:**
 
-**Parámetros:**
+- Libera `s->pts` (si existe) y pone `pts=NULL`, `count=width=height=0`.
+- **Idempotente** y segura ante `NULL`.
 
-- `s` → puntos a dibujar (`s` y `s->pts` válidos).
-- `ren` → `SDL_Renderer` (hilo principal).
-- `canvasW, canvasH` → dimensiones del canvas donde viven los puntos.
-- `img` → imagen de referencia; si es válida se usa para brillo y (si se pide) color.
-- `minR` → radio mínimo. Se clampa internamente a `≥ 0.5`.
-- `maxR` → radio máximo. Si `< minR`, se ajusta a `minR`.
-- `useColor` → `true`: el color del punto se toma de la imagen; `false`: color base.
-- `invertTheme` → `true`: color base negro; `false`: blanco (solo cuando `useColor == false`).
+## `void stipplingRenderStyled(const Stippling *s, SDL_Renderer *ren, int canvasW, int canvasH, const Image *img, float minR, float maxR, bool useColor, bool invertTheme);`
 
-**Comportamiento:**
+**Entradas:**
 
-- Para cada punto `(x,y)`:
+- `s` (`const Stippling*`): nube de puntos (no `NULL`, `s->pts` válido).
+- `ren` (`SDL_Renderer*`): destino (hilo principal).
+- `canvasW, canvasH` (`int`): dimensiones del canvas (>=1).
+- `img` (`const Image*`): imagen de referencia (opcional).
+- `minR, maxR` (`float`): radios mínimo/máximo (clamp interno).
+- `useColor` (`bool`): si `true`, pinta con color de la imagen; si `false`, usa color base tema.
+- `invertTheme` (`bool`): tema claro/oscuro para color base.
 
-  - UV del canvas a la imagen: `u=(x+0.5)/canvasW`, `v=(y+0.5)/canvasH`.
-  - Luminancia bilineal **en lineal** (Rec.709) con `sampleIntensityBilinearUV`.
-  - Radio: `r = lerp(minR, maxR, 1 - lum)` → claro => pequeño; oscuro => grande.
-  - Color:
+**Salidas:**
 
-    - `useColor == false` → usa color base (tema).
-    - `useColor == true` → `sampleRgbBilinearUV` y alfa 230 para una leve suavización.
-  - El disco se rellena por **scanlines** (`SDL_RenderDrawLine`).
+**Descripción:**
 
-**Consideraciones:**
+- Convierte `(x,y)` de cada punto a `uv` normalizado; muestrea **luminancia** (y **RGB** si `useColor`) por bilineal; calcula `radius = lerp(minR,maxR, 1 - lum)`; rasteriza el disco con **scanlines** (`SDL_RenderDrawLine`).
+- Si no hay imagen, `lum=0` -> `radius≈maxR`. El alfa baja ligeramente si `useColor` para suavizar.
 
-- Si `img` es `NULL` o inválida, `lum = 0` => todos los radios \~`maxR` (tema base aplica).
-- Complejidad de dibujo ≈ `O(Σ_i r_i)` (unas `2*r + 1` líneas por punto).
-- Cambia el color del renderer varias veces; no modifica blending mode.
-- No llama a `SDL_RenderPresent` ni limpia el fondo.
+## Diferencias clave: secuencial vs paralelo
 
-## Helpers internos (privados)
-
-### `static float frand01(unsigned *st);`
-
-Generador LCG simple. Devuelve un flotante en `[0,1]` y actualiza la semilla in-place. Se usa para inicializar posiciones.
-
-## Integración
-
-- `stipplingInit` se invoca en `appInit`.
-- `stipplingRenderStyled` se usa en el bucle principal (`appRun`) después de dibujar el fondo.
-- `stipplingFree` se llama en `appShutdown`.
-
-## Seguridad y errores
-
-- Validación básica de punteros: si `s == NULL` o `s->pts == NULL`, el render sale temprano.
-- `stipplingInit` retorna `false` si `malloc` falla.
-- No hay sincronización; no es thread-safe. Dibujar siempre desde el **hilo del renderer**.
-
-## Ejemplo de uso
-
-```c
-// Init
-Stippling s;
-if (!stipplingInit(&s, 2000, winW, winH, 42u)) { /* manejar error */ }
-
-// Draw dentro del frame:
-stipplingRenderStyled(&s, ren, winW, winH,
-                      &img,         // imagen de referencia
-                      0.8f, 3.0f,   // minR, maxR
-                      true,         // useColor
-                      false);       // invertTheme
-
-// Shutdown
-stipplingFree(&s);
-```
+| Aspecto      | Secuencial                                                  | Paralelo (OpenMP)                                                                 |
+| ------------ | ----------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| RNG          | **LCG** 32-bit (`1664525`, `1013904223`), normaliza 24 bits | **xorshift32** por punto, semilla mezclada con índice; `#pragma omp parallel for` |
+| Sincronía    | No aplica                                                   | No se requiere (índices disjuntos)                                                |
+| Determinismo | Sí (misma semilla -> misma nube)                             | Sí (mezcla determinista por `seed`+`i`)                                           |

@@ -107,7 +107,7 @@ OMP_NUM_THREADS=8 ./build/bin/stippling_omp -n 5000 images/input/doge.png
 ### Gamma
 
 * `STIPPLE_GAMMA_START=g0` -> gamma inicial al arrancar (si no se define, usa `defaultGamma`).
-* `STIPPLE_GAMMA_END=g1` -> gamma objetivo para “sweep”; **junto con** `STIPPLE_GAMMA_STEP` activa el barrido.
+* `STIPPLE_GAMMA_END=g1` -> gamma objetivo para "sweep"; **junto con** `STIPPLE_GAMMA_STEP` activa el barrido.
 * `STIPPLE_GAMMA_STEP=dg` -> incremento/decremento por salto del sweep (positivo sube, negativo baja).
 * `STIPPLE_GAMMA_EVERY=k` -> aplica el cambio de gamma cada `k` iteraciones (default: `1`).
 

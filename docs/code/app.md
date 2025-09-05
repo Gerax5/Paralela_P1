@@ -1,209 +1,127 @@
 # `app.c` — Documentación técnica
 
-## Resumen
+## Rol del módulo
 
-`app.c` orquesta la aplicación gráfica _Voronoi Stippling_. Se encarga de:
+`app.c` orquesta la vida de la app **Voronoi Stippling**: inicializa subsistemas (SDL/SDL_image/TTF), crea ventana/renderer, carga fondos, prepara la nube de puntos, ejecuta el bucle principal (eventos -> simulación -> render), muestra métricas y libera recursos al salir. El tipo `App` es **opaco** fuera de `app.c` y concentra todo el estado de ejecución (ventana, renderer, imagen, puntos, timers, UI, logging, etc.).
 
-- Inicializar/cerrar SDL y SDL_image.
-- Crear ventana, renderer y recursos de imagen.
-- Mantener el estado de la simulación (puntos, iteraciones, parámetros).
-- Bucle por frame:
-  - entrada (teclado/ventana)
-  - simulación (Lloyd manual/auto)
-  - render (fondo + puntos) y captura opcional.
-- Mostrar métricas (FPS, iteraciones, parámetros) en el título.
+> Vida útil: los recursos viven entre `appInit(..)` y `appShutdown(..)`; el `struct App` contiene ventana/renderer, imagen/texture, nube de puntos, timers/FPS, opciones visuales, batch/logging y rotación de fondos.
 
 ## Flujo de alto nivel
 
-```text
-appInit(...) -> appRun(app) -> appShutdown(app)
-```
+- **appInit** -> **appRun** -> **appShutdown**.
+   En `appRun`: por frame hace **entrada** (SDL events), **simulación** (Lloyd manual o auto, con timing/CSV y sweep de gamma si procede) y **render** (fondo + puntos + overlay + captura).
 
-## Estructura `App`
+**Teclas** (resumen): `ESC`, `SPACE`, `A`, `G/H`, `B`, `Z/X`, `N/M`, `,/.`, `C`, `I`, `R`, `P`, `O/U`. El módulo imprime esta ayuda al iniciar.
 
-```c
-struct App {
-  // SDL
-  SDL_Window   *win;
-  SDL_Renderer *ren;
+## Convenciones
 
-  // Canvas
-  int w, h;
+- **Hilo principal**: todas las funciones de `app` se invocan desde el **main thread**.
+- **Defensivo**: comprobaciones de error ante fallos de creación de ventana/renderer, `IMG_Init`, etc., con liberación ordenada antes de devolver `false`.
+- **Idempotencia de cierre**: `appShutdown(NULL)` no falla; además hace `free/destroy` condicionales y cierra subsistemas en orden.
+- **Batch/Métricas**: si `metricsPath` está definido, cada iteración registra `iter,ms,step,gamma,npoints` (CSV, con encabezado).
+- **Overlay y título**: título/overlay se refrescan \~cada 0.25s con `FPS`, `iters`, `step`, `gamma`, radios, y flags `[COLOR]/[INVERT]`.
+- **Screenshots**: la captura se realiza **al final del frame** si `wantScreenshot` está activo.
+- **Fondos**: se mantiene una lista circular de rutas y se cargan con `appSetBackgroundList`/`appNextBackground`/`appPrevBackground`.
 
-  // Tiempo/FPS
-  Uint64 freq, last;
-  double accTime, lastFpsUpdate;
-  int    frames;
+## Funciones públicas (expuestas en `app.h`)
 
-  // Imagen + puntos
-  Image     image;
-  SDL_Texture *imageTex;
-  Stippling stip;
+### `bool appInit(App **outApp, int width, int height, const char *title, const char *imagePath, int npoints);`
 
-  // Visual
-  bool  colorPoints;   // colorear cada punto desde la imagen
-  bool  invertTheme;   // alterna fondo claro/oscuro y base de puntos
-  float minRadius;     // radio mínimo por punto (estilizado)
-  float maxRadius;     // radio máximo por punto (estilizado)
+- **Entradas:**
+  `outApp: App**` (salida por referencia) - `width,height: int` (<=0 usa defaults) + `title: const char*` (NULL -> default) + `imagePath: const char*` (NULL -> default) + `npoints: int` (<=0 -> default).
+- **Salidas:**
+  `bool` – `true` si inicializó todo correctamente.
+- **Descripción:**
+  Inicializa `SDL`/`SDL_image`/`TTF`, crea ventana/renderer VSYNC, prepara directorios, carga lista de fondos (o la imagen pasada), inicializa la nube de puntos y la UI (fuente/overlay). Imprime ayuda de teclas. Maneja errores liberando recursos y retornando `false`.
 
-  // Lloyd
-  bool  autoRun;
-  int   iters;
-  int   pixelStride;   // k >= 1
-  float gammaW;        // (1 - luminancia)^gamma
-  unsigned seed;       // para reseed (R)
+### `void appRun(App *app);`
 
-  // Render/utilidades
-  bool showBg;
-  int  dotRadius;      // radio fijo (si no se usa el estilizado)
-  bool wantScreenshot;
+- **Entradas:**
+  `app: App*` (instancia válida).
+- **Salidas:** (bloquea hasta salir).
+- **Descripción:**
+  Bucle principal: procesa eventos (`SDL_QUIT`, `SDL_KEYDOWN`), ejecuta **Lloyd** en modo **manual** (`SPACE`) o **auto** (si `autoRun`), mide tiempos y registra CSV si está activo, aplica **sweep de gamma** según configuración y renderiza (fondo sólido/imagen, puntos estilizados, overlay y captura diferida). Refresca título/overlay cada \~0.25s.
 
-  // Batch/medición
-  int   maxIters;      // 0 -> sin tope
-  char *metricsPath;   // CSV (si no NULL)
+### `void appShutdown(App *app);`
 
-  // Sweep de gamma (batch/testing)
-  bool  sweepGamma;
-  float gStart, gEnd, gStep;
-  int   gEvery;        // aplicar cada N iteraciones
+- **Entradas:**
+  `app: App*` (se permite `NULL`).
+- **Salidas:**
+- **Descripción:**
+  Libera nube de puntos y texturas, destruye renderer/ventana, cierra `TTF`, `IMG_Quit`, `SDL_Quit`, libera lista de fondos y el `App`. Idempotente ante punteros internos `NULL`.
 
-  // --- Overlay FPS
-  TTF_Font    *font;         // fuente para texto
-  SDL_Texture *fpsTex;       // textura cacheada del texto "FPS: ... "
-  int          fpsTexW;
-  int          fpsTexH;
-  double       lastFpsOverlayUpdate; // última vez que refrescamos el texto
+### **Fondos**
 
-  // --- Lista de fondos
-  char  **bgPaths;
-  int     bgCount;
-  int     bgIndex;
+- `bool appSetBackgroundList(App *app, int count, const char *const *paths);`
+  - **In**: `app`, `count>0`, `paths[]`
+  - **Out**: `bool`
+  - **Desc.** Duplica y guarda la lista (propiedad pasa a `App`) y carga el primer fondo.
+- `void appNextBackground(App *app);` - `void appPrevBackground(App *app);`
+  - **In**: `app`
+  - **Out**:
+  - **Desc.** Avanza/retrocede circularmente y **carga** el fondo.
 
-  double bgTimer;    // segundos acumulados desde el último cambio
-  double bgPeriod;   // cada cuántos segundos cambiar de imagen (>0 activa)
-};
-```
+## Helpers **internos** (estáticos en `app.c`)
 
-**Notas:**
+- `static void refreshFpsOverlay(App *app);`
+  - **In**: `app`
+  - **Out**:
+  - **Desc.** Regenera el texto del overlay (FPS/it/step/gamma) y cachea textura; llamado \~cada 0.25 s.
 
-- Los recursos viven entre `appInit` y `appShutdown`.
-- `minRadius/maxRadius`, `colorPoints`, `invertTheme` afectan el render “estilizado”.
-- `metricsPath`, `maxIters` y el _sweep_ de gamma permiten ejecuciones batch con logging.
+- `static void drawFpsOverlay(App *app);`
+  - **In**: `app`
+  - **Out**:
+  - **Desc.** Dibuja un recuadro semitransparente y la textura cacheada del overlay.
 
-## Inicialización — `appInit`
+- `static void ensureDir(const char *path);`
+  - **In**: `path`
+  - **Out**:
+  - **Desc.** Crea el directorio si no existe (defensivo).
 
-Hace:
+- `static bool loadBackground(App *app, const char *path);`
+  - **In**: `app`, `path`
+  - **Out**: `bool`
+  - **Desc.** Carga imagen (PNG/JPG), crea `SDL_Texture` y reemplaza la anterior.
 
-- `SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER)` y `IMG_Init(PNG | JPG)`.
-- Crea ventana y renderer acelerado (con VSYNC si hay).
-- Carga imagen (si falla, se puede continuar sin fondo) y crea textura.
-- Inicializa nube de puntos (`stipplingInit`).
-- Define defaults: `autoRun=false`, `pixelStride=defaultLloydStep`, `gammaW=defaultGamma`, `minRadius=0.8`, `maxRadius=3.0`, etc.
-- Imprime ayuda de teclas en consola.
+- `static void updateFpsTitle(App *app);`
+  - **In**: `app`
+  - **Out**:
+  - **Desc.** Formatea el **título** de la ventana con `FPS`, `it`, `step`, `gamma`, radio y flags de visual.
 
-**Variables de entorno soportadas:**
+- `static void sweepGammaTick(App *app);`
+  - **In**: `app`
+  - **Out**:
+  - **Desc.** Si el barrido está activo, ajusta `gammaW` cada `gEvery` iteraciones en dirección a `gEnd`.
 
-- `STIPPLE_AUTORUN=1` -> arranca en auto.
-- `STIPPLE_MAX_ITERS=N` -> tope de iteraciones (batch).
-- `STIPPLE_METRICS=path.csv` -> log por iteración (se crea encabezado si no existe).
-- Sweep de gamma:
-
-  - `STIPPLE_GAMMA_START=<f>` (opcional),
-  - `STIPPLE_GAMMA_END=<f>` (requiere),
-  - `STIPPLE_GAMMA_STEP=<f>` (requiere),
-  - `STIPPLE_GAMMA_EVERY=<int>` (opcional; default=1).
-
-## Título y FPS — `updateFpsTitle`
-
-- Formatea: `FPS`, `it`, `step`, `gamma`, `r` (radio fijo), `minR/maxR`, y flags `[COLOR]` / `[INVERT]`.
-- Se actualiza aprox. cada 0.25 s desde `appRun`.
-
-## Capturas — `saveScreenshot`
-
-- Asegura `images/output/`.
-- Copia el _framebuffer_ a un `SDL_Surface` RGBA32 y guarda `PNG`.
-- Nombre: `images/output/stipple_XXXXX.png` (`XXXXX = iters`).
-- Debe llamarse al final del frame para capturar lo que se ve.
-
-## Fondos rotables
-
-- `appSetBackgroundList`
-  - Copia y guarda la lista y carga el primer fondo
-- `appNextBackground`, `appPrevBackground`
-  - Avanza/retrocede circularmente y carga el fondo.
-
-## Bucle principal — `appRun`
-
-**Por frame:**
-
-1. **Entrada**
-
-   - `SDL_PollEvent`: `SDL_QUIT` y `SDL_KEYDOWN`.
-   - **Atajos de teclado:**
-     - `ESC` -> salir.
-     - `SPACE` -> 1 paso de Lloyd (con timing + CSV si activo).
-     - `A` -> auto ON/OFF.
-     - `-` / `+` (incluye keypad y `=`) -> `pixelStride` down/up.
-     - `G` / `H` -> `gammaW` up/down.
-     - `B` -> alterna `showBg`.
-     - `Z` / `X` -> `dotRadius` down/up.
-     - `R` -> reseed con nueva `seed`.
-     - `P` -> marcar captura del frame.
-     - `C` -> alterna `colorPoints` (color real de la imagen).
-     - `I` -> alterna `invertTheme` (tema claro/oscuro).
-     - `N` / `M` -> `minRadius` -/+ (clamp `[0.5, maxRadius]`).
-     - `,` / `.` -> `maxRadius` -/+ (clamp `[minRadius, 20]`).
-
-2. **Simulación:**
-
-   - Calcula `dt`, acumula `accTime` y `frames`.
-   - Si `autoRun`, ejecuta `lloydStep` (mide tiempo, loguea si `metricsPath`).
-   - Aplica sweep de gamma si está activo (cada `gEvery` iters).
-
-3. **Render:**
-
-   - Fondo sólido o imagen (según `showBg` e `imageTex`), respetando `invertTheme`.
-   - Dibuja puntos con `stipplingRenderStyled(...)` usando:
-
-     - `minRadius/maxRadius`, `colorPoints`, `invertTheme`, y brillo local de la imagen.
-
-   - Si `wantScreenshot`, guarda PNG y limpia el flag.
-   - `SDL_RenderPresent()`.
-
-**Notas:**
-
-- `lloydStep` usa muestreo bilineal UV y _UniformGrid_ para _nearest neighbor_.
-- `pixelStride` balancea costo/calidad (3–4 suele ir bien).
-
-## Cierre — `appShutdown`
-
-Orden:
-
-1. `stipplingFree`
-2. `SDL_DestroyTexture`, `imageFree`, `SDL_DestroyRenderer`, `SDL_DestroyWindow`
-3. `IMG_Quit`, `SDL_Quit`
-4. `free(app)`
-
-Idempotente a nivel de punteros internos; no-op si `app == NULL`.
+- `static bool saveScreenshot(App *app);`
+  - **In**: `app`
+  - **Out**: `bool`
+  - **Desc.** Lee el backbuffer y guarda `PNG` con nombre `images/output/stipple_%05d.png` (iteración actual). Se invoca al **final** del frame.
 
 ## Interacción con otros módulos
 
-- `image.c`: carga y muestreo (luminancia/ RGB bilineal).
-- `lloyd.c`: paso de Lloyd con ponderación por oscuridad y reseed de huérfanos.
-- `voronoi.c`: _UniformGrid_ para acelerar NN.
-- `stippling.c`: estado y render (incluye versión “estilizada” por brillo/color).
+- **`image.*`**: carga PNG/JPG y muestreo bilineal de color/ luminancia.
+- **`stippling.*`**: estructura de puntos y render "estilizado" (radios por intensidad/color).
+- **`lloyd.*` / `voronoi.*`**: paso de Lloyd (centroidal Voronoi) y búsqueda de vecino más cercano con **UniformGrid**. En builds paralelos, la paralelización vive aquí; `app.c` permanece en el hilo principal.
 
-## Parámetros clave en runtime
+## Despliegue de resultados
 
-- `pixelStride` (>=1): más alto -> más rápido/menos preciso por paso.
-- `gammaW`: >1 concentra en zonas oscuras; <1 aplanado.
-- `minRadius/maxRadius`: controlan el rango de radios por punto (estilizado).
-- `colorPoints`: ON -> usa color real; OFF -> monocromo según tema.
-- `invertTheme`: alterna fondo claro/oscuro y base de puntos.
-- `autoRun`: ejecuta Lloyd en cada frame.
+- **Overlay** (FPS/estado) y **título** informativo, actualizados \~cada 0.25 s.
+- **Screenshots** en `images/output/` cuando se pulsa `P` (captura diferida al final del frame).
 
-## Registro y errores
+## Variables de entorno relevantes (soportadas por `app.c`)
 
-- Errores a `stderr`.
-- Info/ayuda y confirmaciones a `stdout` (p. ej., captura guardada).
-- CSV (si `metricsPath`) con encabezado auto y filas `iter,ms,step,gamma,npoints`.
+- `STIPPLE_AUTORUN=1|0` -> auto-iterar Lloyd por frame.
+- `STIPPLE_MAX_ITERS=K` -> modo batch: salir al llegar a `K` iteraciones (log si `STIPPLE_METRICS`).
+- `STIPPLE_METRICS=path.csv` -> CSV por iteración: `iter,ms,step,gamma,npoints`.
+- **Barrido de gamma**: `STIPPLE_GAMMA_START`, `STIPPLE_GAMMA_END`, `STIPPLE_GAMMA_STEP`, `STIPPLE_GAMMA_EVERY` (activa cuando hay `END` y `STEP`).
+
+## Glosario mínimo del estado `App`
+
+- **Tiempo/FPS**: `freq`, `last`, `accTime`, `frames`, `fpsAvg`, `lastUiUpdate`.
+- **Recursos**: `image`, `imageTex`, `stip`.
+- **Visual**: `showBg`, `colorPoints`, `invertTheme`, `minRadius`, `maxRadius`, `dotRadius`.
+- **Lloyd**: `autoRun`, `iters`, `pixelStride`, `gammaW`, `seed`.
+- **Batch**: `maxIters`, `metricsPath`, `sweepGamma{gStart,gEnd,gStep,gEvery}`.
+- **UI**: `font`, `fpsTex`, `fpsTexW/H`.
+- **Fondos**: `bgPaths`, `bgCount`, `bgIndex`, `bgTimer`, `bgPeriod`.

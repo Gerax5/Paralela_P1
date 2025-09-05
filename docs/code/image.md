@@ -1,128 +1,89 @@
-# `image.c` — carga y muestreo de imágenes
+# `image.c` — Documentación técnica
 
-Módulo para cargar una imagen con SDL_image y muestrearla en escala de grises (luminancia Rec.709) **y en color sRGB**. Soporta muestreo puntual (nearest) y bilineal en coordenadas normalizadas.
-**Novedad:** el camino bilineal de luminancia convierte de **sRGB a lineal** antes de calcular la luma, lo que mejora el contraste percibido.
+## Rol del módulo
 
-## Dependencias
+Proveer una **capa delgada y segura** para: (1) cargar una imagen desde disco, (2) convertirla a un formato homogéneo `RGBA32`, (3) **precomputar luminancia lineal** (`img->luma`) y (4) exponer **muestras** de intensidad/color con versiones **nearest** y **bilineal**.
 
-- SDL2_image para `IMG_Load` / `IMG_SavePNG` (si se usa).
-- SDL2 para `SDL_Surface`, formatos de pixel y utilidades.
+## Flujo interno
 
-## Suposiciones de formato
+1. **Carga**
 
-- Tras cargar, la imagen se convierte a `SDL_PIXELFORMAT_RGBA32` para uniformidad.
-- `img->pixels` apunta al buffer interno de `img->surface`.
-- `img->pitchPixels == surface->pitch / 4` (RGBA8888 = 4 bytes por píxel).
-- Para extraer canales se prioriza **`SDL_GetRGBA`** vía `unpackRGBA(...)`, que respeta masks/shifts del `SDL_PixelFormat`.
-  Existe además el helper `rgbaToUint8(...)` (asume layout `0xRRGGBBAA`) útil en contextos controlados.
+   - `imageLoad(img, path)` valida punteros, hace `IMG_Load`, convierte a `SDL_PIXELFORMAT_RGBA32`, rellena campos (`w,h,pixels,pitchPixels`) y dispara `imageBuildLuma(img)`. En error, limpia y **loggea** en `stderr`.
 
-## Colorimetría y espacio de color
+2. **Precálculo de luma**
 
-- **`srgbToLinear01`** implementa la curva IEC 61966-2-1 para pasar de sRGB → **lineal**.
-- **`lumaFromPixel`** convierte R,G,B a lineal y calcula la luminancia **Rec.709**:
+   - `imageBuildLuma(img)` recorre filas/columnas, extrae `R,G,B` (vía `SDL_GetRGBA`), convierte **sRGB->lineal** y calcula **luma Rec.709** por píxel; guarda en `img->luma`. (Escalable por filas; sin sincronización compartida).
 
-  ```bash
-  Y = 0.2126*R + 0.7152*G + 0.0722*B
-  ```
+3. **Muestreo**
 
-- **`sampleIntensityBilinearUV`** usa `lumaFromPixel`, por lo que su luminancia es **lineal y físicamente coherente**.
-- **`sampleIntensity`** (nearest) usa bytes normalizados en sRGB (sin convertir a lineal). Es más rápido, pero puede diferir levemente del bilineal en zonas muy claras/oscuras.
+   - **Nearest:** `sampleIntensity(img,x,y)` usa `pitchPixels`, desempaqueta canales con `SDL_GetRGBA` y calcula luma **en sRGB normalizado** (rápido).
+   - **Bilineal (luma):** `sampleIntensityBilinearUV(img,u,v)` **clamp**, mapea `(u,v)->(x,y)`, toma 4 vecinos y **mezcla en dominio lineal** (si hay `img->luma`, usa la tabla).
+   - **Bilineal (color):** `sampleRgbBilinearUV(img,u,v, r,g,b)` interpola canales **sRGB** para tintar puntos.
 
-## Tipos usados
+4. **Liberación**
+
+   - `imageFree(img)` libera la `SDL_Surface` y deja la estructura en estado neutro (**idempotente**).
+
+## Convenciones
+
+- **Formato**: siempre `SDL_PIXELFORMAT_RGBA32`; `pixels = (Uint32*)surface->pixels`; `pitchPixels = surface->pitch / 4`.
+- **Coordenadas**: `(x,y)` en píxel entero; `(u,v)` **normalizados** \[0..1] (se hace **clamp** interno).
+- **Luma**: **Rec.709** en \[0..1]; **nearest** la computa en sRGB, **bilineal** la interpola en **lineal** (evita artefactos por gamma).
+- **Portabilidad**: extracción de canales con `SDL_GetRGBA` (independiente de endian/layout).
+- **Defensivo**: validaciones de punteros/rangos y `clamp` a \[0..1] en bilineal. Retornos nulos ante entradas inválidas.
+
+**Paralelo/sincronía**: `imageBuildLuma` es **embarrassingly parallel** por filas; no requiere sincronización si se paraleliza externamente (cada hilo escribe su fila). El módulo no introduce primitivas de sincronía propias.
+
+## Tipo principal
 
 ```c
 typedef struct {
-  int w, h;          // dimensiones en píxeles
-  int pitchPixels;   // pitch en píxeles (no bytes)
-  Uint32 *pixels;    // buffer RGBA8888
+  int w, h;            // dimensiones px
+  int pitchPixels;     // pitch/4 en RGBA32
+  Uint32 *pixels;      // buffer RGBA8888 (alias de surface->pixels)
   SDL_Surface *surface;
+  float *luma;         // luminancia lineal precomputada (w*h)
 } Image;
 ```
 
-## Helpers internos
+## `bool imageLoad(Image *img, const char *path);`
 
-- `static inline float srgbToLinear01(float c)`: sRGB → lineal en \[0,1].
-- `static inline void unpackRGBA(const Image*, Uint32 px, Uint8*,Uint8*,Uint8*,Uint8*)`: extrae RGBA usando `SDL_GetRGBA` del formato real de la surface (portátil).
-- `static inline void rgbaToUint8(Uint32 px, Uint8*,Uint8*,Uint8*,Uint8*)`: desempaque por shifts; **asume** layout `0xRRGGBBAA`.
+- **Entradas**: `img` (salida no inicializada), `path` (ruta).
+- **Salidas**: `true/false`. En éxito, llena `w,h,pixels,pitchPixels,surface` y **construye `luma`**.
+- **Descripción**: carga vía `SDL_image`, convierte a `RGBA32`, deja el objeto listo para muestreos; limpia y reporta en error.
 
-## API
+## `void imageBuildLuma(Image *img);`
 
-### `bool imageLoad(Image *img, const char *path)`
+- **Entradas**: `img` válido con `pixels`/`surface`.
+- **Salidas**: — (efecto: `img->luma = w*h` en **lineal**).
+- **Descripción**: recorre la imagen, hace `sRGB->lineal` canal por canal y calcula luma Rec.709 en un buffer contiguo para **muestreo bilineal rápido/fiel**. Escalable por filas.
 
-Carga PNG/JPG y convierte a `RGBA32`.
+## `void imageFree(Image *img);`
 
-**Flujo:**
+- **Entradas**: `img` (se permite `NULL`).
+- **Salidas**: —.
+- **Descripción**: libera la `SDL_Surface` y pone `w=h=pitchPixels=0`, `pixels=surface=luma=NULL`. **Segura e idempotente**.
 
-1. `IMG_Load(path)`
-2. `SDL_ConvertSurfaceFormat(..., SDL_PIXELFORMAT_RGBA32, 0)`
-3. Completa `img` (`surface`, `pixels`, `w`, `h`, `pitchPixels`)
+## `float sampleIntensity(const Image *img, int x, int y);`
 
-**Retorno:** `true` en éxito; `false` en error (se loguea en `stderr`).
-**Notas:** `img->pixels` no se libera aparte; pertenece a `img->surface`.
+- **Entradas**: `img`, `x,y` en rango.
+- **Salidas**: `luma_srgb` en \[0..1] (0.0 si inválido).
+- **Descripción**: muestreo **nearest** de luma Rec.709 a partir de `RGBA32` usando `SDL_GetRGBA` y pesos Rec.709 **en sRGB**. Muy rápido; para **interpolación fiel** usa la versión bilineal.
 
-### `void imageFree(Image *img)`
+## `float sampleIntensityBilinearUV(const Image *img, float u, float v);`
 
-Libera la `SDL_Surface` y deja `img` en estado neutro (`NULL`/`0`). Idempotente y segura con `img == NULL`.
+- **Entradas**: `img`, `u,v` normalizados (se hace **clamp** interno).
+- **Salidas**: `luma_lineal` en \[0..1] (0.0 si inválido).
+- **Descripción**: mapea `(u,v)` -> `(x,y)`, toma los 4 vecinos y **mezcla en lineal**. Si existe `img->luma`, la usa directamente (menos conversiones).
 
-### `float sampleIntensity(const Image *img, int x, int y)`
+## `void sampleRgbBilinearUV(const Image *img, float u, float v, Uint8 *r, Uint8 *g, Uint8 *b);`
 
-Muestreo **nearest** en coordenadas de píxel.
-Devuelve luminancia Rec.709 **aproximada** en `[0,1]` (sin pasar a lineal).
-Retorna `0.0f` si parámetros/rangos no son válidos.
+- **Entradas**: `img`, `u,v`, punteros `r,g,b`.
+- **Salidas**: `r,g,b ∈ [0..255]` (0s si inválido).
+- **Descripción**: muestreo **bilineal** por canal en **sRGB** (rápido y suficiente para colorear puntos).
 
-### `float sampleIntensityBilinearUV(const Image *img, float u, float v)`
+## Notas de programación defensiva
 
-Muestreo **bilineal** de luminancia en `u,v ∈ [0,1]`.
-Clampea `u,v`, toma `p00,p10,p01,p11`, convierte cada vecino a **lineal** y mezcla bilinealmente.
-Retorna `0.0f` si la imagen no es válida.
-
-### `void sampleRgbBilinearUV(const Image *img, float u, float v, Uint8 *r, Uint8 *g, Uint8 *b)`
-
-Muestrea **color sRGB** por bilineal en `u,v ∈ [0,1]` y escribe `r,g,b ∈ [0..255]`.
-Interpolación realizada en espacio sRGB (rápida; suficiente para “tintar” puntos).
-Si la imagen/parámetros no son válidos, escribe `0,0,0`.
-
-## Errores y retorno
-
-- `imageLoad` retorna `false` si falla `IMG_Load` o la conversión; imprime motivo.
-- Los muestreos retornan `0.0f` (o `0,0,0`) ante entradas inválidas.
-
-## Rendimiento
-
-- **Nearest (`sampleIntensity`)**: 1 lectura + aritmética mínima → **muy rápido**.
-- **Bilineal de luma (`sampleIntensityBilinearUV`)**: 4 lecturas + sRGB→lineal + mezcla → **más costo, mejor fidelidad**.
-- **Bilineal de color (`sampleRgbBilinearUV`)**: 4 lecturas + mezcla sRGB → costo similar al de luma bilineal, sin conversiones sRGB→lineal.
-
-## Ejemplo
-
-```c
-Image img;
-if (!imageLoad(&img, "images/input/twitch.png")) {
-  // manejar error
-}
-
-// nearest en (100,50) (aprox en sRGB)
-float y0 = sampleIntensity(&img, 100, 50);
-
-// bilinear (correcto en lineal)
-float y1 = sampleIntensityBilinearUV(&img, 0.33f, 0.75f);
-
-// color sRGB bilineal
-Uint8 r,g,b;
-sampleRgbBilinearUV(&img, 0.33f, 0.75f, &r, &g, &b);
-
-imageFree(&img);
-```
-
-## Invariantes
-
-Tras `imageLoad == true`:
-
-- `img->surface` y `img->pixels` no son `NULL`
-- `img->w > 0`, `img->h > 0`
-- `img->pitchPixels == img->surface->pitch / 4`
-
-Tras `imageFree(&img)`:
-
-- `img->surface == NULL`, `img->pixels == NULL`
-- `img->w == img->h == img->pitchPixels == 0`
+- Validación de **punteros/rangos** en `imageLoad`, `sampleIntensity`, `sampleIntensityBilinearUV`.  
+- **Clamp** de `(u,v)` a \[0..1] en bilineal.
+- Extracción de canales con `SDL_GetRGBA` (portátil, evita asumir desplazamientos).

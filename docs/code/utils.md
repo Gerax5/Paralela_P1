@@ -1,82 +1,80 @@
-# `utils.c` — utilidades de FS, tiempo y CSV
+# `utils.c` — Documentación técnica
 
-Pequeño módulo de utilidades para:
+## Rol del módulo
 
-- asegurar directorios (`mkdir -p` estilo POSIX),
-- medir tiempo monótono en nanosegundos y convertir a ms,
-- anexar filas a un CSV con cabecera automática.
+Utilidades de bajo nivel para: **asegurar directorios** (tipo `mkdir -p`), **medir tiempo monótono** (ns) y **apendear** filas a **CSV** con cabecera automática. API mínima y portable sobre POSIX/C estándar.
 
-## Dependencias
+## Flujo (alto nivel)
 
-- POSIX: `sys/stat.h`, `errno.h`, `time.h` (`clock_gettime`, `CLOCK_MONOTONIC`)
-- C estándar: `stdio.h`, `stdarg.h`, `string.h`, `stdlib.h`
+1. La app solicita un **timestamp** antes/después de una sección crítica -> `util_now_ns()` -> diferencia -> `util_ns_to_ms()` para loguear ms.
+2. Para **métricas**, se llama `util_csv_append(path, header, fmt, ...)`; si el archivo no existía, se **asegura el directorio** y se escribe el **header** una vez.
 
-## API pública
+## Convenciones
 
-```c
-bool     util_fs_ensure_dir(const char *path);
-uint64_t util_now_ns(void);
-double   util_ns_to_ms(uint64_t ns);
-bool     util_csv_append(const char *path, const char *header,
-                         const char *fmt, ...);
-```
+- **Thread-safety**: seguro si cada hilo escribe **archivos distintos**; para el **mismo CSV** usa sincronización externa (no hay locking interno).
+- **Errores**: funciones retornan `bool` (éxito/fallo) y no dependen de `errno` del llamador.
+- **Portabilidad**: asume separador `/` y API POSIX (`mkdir`, permisos `0755`). No interpreta `\\` de Windows.
 
-## Funciones
+## `bool util_fs_ensure_dir(const char *path);`
 
-### `bool util_fs_ensure_dir(const char *path)`
+- **Entradas:**
+  - `path` (`const char*`): ruta de **directorio** a garantizar (no vacía).
+- **Salidas:**
+  - `true` si el directorio existe (ya existía o fue creado); `false` en error real.
+- **Descripción**
+Comprueba si `path` es un directorio; si no, intenta crearlo (recursivo) vía `mkpath`. Soporta barra final y usa permisos `0755`.
 
-**Qué hace:** Garantiza que exista el directorio `path`. Si no existe, lo crea recursivamente (comportamiento tipo `mkdir -p`).
+## `uint64_t util_now_ns(void);`
 
-**Detalles:**
+- **Entradas:**
+- **Salidas:**
+  - `uint64_t`: **nanosegundos** desde un reloj **monótono** (`CLOCK_MONOTONIC`).
+- **Descripción**
+Reloj de alta resolución para **medir intervalos** (no calendario). Implementado con `clock_gettime(CLOCK_MONOTONIC, ...)`.
 
-- Permisos `0755` al crear.
-- Soporta separador `/` y tolera barra final.
-- Devuelve `true` si el directorio ya existía o se creó; `false` en error real.
+## `double util_ns_to_ms(uint64_t ns);`
 
-**Notas de portabilidad:** Asume POSIX (`mkdir` y permisos Unix). No trata `\\` de Windows.
+- **Entradas:**
+  - `ns` (`uint64_t`): intervalo en nanosegundos.
+- **Salidas:**
+  - `double`: **milisegundos** (`ns / 1e6`).
+- **Descripción**
+Conversión directa de ns->ms para reportes de tiempo.
 
-### `uint64_t util_now_ns(void)`
+## `bool util_csv_append(const char *path, const char *header, const char *fmt, ...);`
 
-**Qué hace:** Devuelve tiempo **monótono** en nanosegundos desde un origen no especificado.
+- **Entradas:**
+  - `path` (`const char*`): ruta del CSV.
+  - `header` (`const char*`): cabecera opcional a escribir si el archivo **no existía**.
+  - `fmt, ...`: formato estilo `printf` de la **fila** a apendear (recomendado terminar con `\n`).
 
-**Uso recomendado:** medir intervalos (no es fecha/hora de calendario).
-
-**Fuente:** `clock_gettime(CLOCK_MONOTONIC, ...)`.
-
-### `double util_ns_to_ms(uint64_t ns)`
-
-**Qué hace:** Conversión simple de nanosegundos a milisegundos (`ns / 1e6`).
-
-### `bool util_csv_append(const char *path, const char *header, const char *fmt, ...)`
-
-**Qué hace:** Abre/crea `path` en modo append y escribe una fila formateada (estilo `printf`).
-Si el archivo **no existe**, primero escribe `header` (si no es vacío) y le añade `\n` si falta.
-
-**Comportamiento:**
-
-- Asegura el **directorio contenedor** (crea si no existe).
-- No realiza *locking* entre procesos/hilos.
-- Devuelve `true` en éxito, `false` si falla asegurar dir, abrir o escribir.
-
-**Recomendación:** incluye `\n` en el `fmt` de la fila.
+- **Salidas:**
+  - `true` en éxito; `false` si falla asegurar dir/abrir/escribir.
+- **Descripción**
+Abre el archivo en **append**; si el archivo no existía, escribe primero `header` (añade `\n` si falta). Antes, **extrae el directorio** (`dirname_from_path`) y llama a `util_fs_ensure_dir` para asegurarlo. **No** realiza locking concurrente.  
 
 ## Funciones internas (no exportadas)
 
-- `static bool mkpath(const char *path)`: implementación recursiva de creación de directorios (usa `mkdir`, ignora `EEXIST`).
-- `static void dirname_from_path(const char *path, char *out, size_t out_sz)`: extrae directorio de una ruta (`"a/b/c.csv" -> "a/b"`).
+### `static bool mkpath(const char *path);`
+
+Crea **recursivamente** cada prefijo de `path` (estilo `mkdir -p`), ignorando `EEXIST`. Recorta barra final, usa permisos `0755`.
+
+### `static void dirname_from_path(const char *path, char *out, size_t out_sz);`
+
+Extrae el **directorio contenedor** de una ruta (`"a/b/c.csv"->"a/b"`, `"file.csv"->""`), asegurando terminación NUL.
 
 ## Ejemplos de uso
 
-### Medir tiempo de una operación
+**Medición de tiempo:**
 
 ```c
 uint64_t t0 = util_now_ns();
 /* ... trabajo ... */
 uint64_t t1 = util_now_ns();
-printf("took %.3f ms\n", util_ns_to_ms(t1 - t0));
+double ms = util_ns_to_ms(t1 - t0);
 ```
 
-### Registrar métricas en CSV con cabecera automática
+**Registro de métricas:**
 
 ```c
 util_csv_append("images/output/seq/metrics.csv",
