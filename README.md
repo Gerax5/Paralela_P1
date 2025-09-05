@@ -1,155 +1,150 @@
-# Voronoi Stippling (Secuencial)
+# Voronoi Stippling — Secuencial & Paralelo
 
-Pequeña demo interactiva de **stipple** usando **Algoritmo de Lloyd** sobre una imagen.
-La densidad de puntos se guía por la **luminancia** (zonas oscuras atraen más puntos).
-Render y entrada con **SDL2**, carga de imágenes con **SDL2_image**.
+Demo de **Voronoi Stippling** usando el **algoritmo de Lloyd** para distribuir puntos según la luminancia de una imagen.
+Incluye versión **secuencial** y **paralela (OpenMP)** para pruebas de rendimiento.
 
-## Requisitos
-
-- Ubuntu / WSL (o Linux con GCC)
-- Paquetes de desarrollo de SDL2
-
-### Instalar dependencias
+## 📂 Estructura del proyecto
 
 ```bash
-sudo apt-get update
-sudo apt-get install -y build-essential libsdl2-dev libsdl2-image-dev fonts-jetbrains-mono libsdl2-ttf-dev
+.
+├── Makefile
+├── README.md
+├── build/              # binarios compilados
+├── docs/               # documentación y reportes
+├── images/             # imágenes de entrada/salida
+├── include/            # headers (.h)
+├── src/                # código fuente (.c)
+└── tests/              # scripts y benchmarks
 ```
 
-## Compilar
+## ⚙️ Compilación
 
-### Línea directa (sin Makefile)
+Compilar con:
 
 ```bash
-mkdir -p build/bin
-gcc -std=c11 -O2 -Wall -Wextra -fopenmp -D_POSIX_C_SOURCE=200809L     src/main.c src/app.c src/image.c src/stippling.c src/lloyd.c src/voronoi.c src/utils.c     -Iinclude     $(sdl2-config --cflags) $(pkg-config --cflags SDL2_image SDL2_ttf)     -o build/bin/stippling_demo     $(sdl2-config --libs) $(pkg-config --libs SDL2_image SDL2_ttf) -l
+make clean && make
 ```
 
-> Nota: `-D_POSIX_C_SOURCE=200809L` habilita `strdup` en GCC/GLIBC.
+Esto genera:
 
-### Línea directa (con Makefile)
+* `build/bin/stippling_seq` -> versión secuencial
+* `build/bin/stippling_omp` -> versión paralela (OpenMP)
+
+## ▶️ Ejecución interactiva
+
+Ejemplo secuencial:
 
 ```bash
-make clean
-make
+./build/bin/stippling_seq -n 5000 images/input/doge.png
 ```
 
-## Ejecutar
-
-### Modo normal
-
-#### Secuencial
+Ejemplo paralelo (8 hilos):
 
 ```bash
-./build/bin/stippling_demo -n 5000
+OMP_NUM_THREADS=8 ./build/bin/stippling_omp -n 5000 images/input/doge.png
 ```
 
-#### Paralelo
+### Controles de teclado
+
+* `SPACE` -> una iteración de Lloyd
+* `A` -> auto-run ON/OFF
+* `- / + / =` -> step (pixelStride) -/+
+* `G / H` -> gamma -/+
+* `B` -> mostrar/ocultar fondo
+* `Z / X` -> radio visual fijo -/+
+* `N / M` -> minRadius -/+
+* `, / .` -> maxRadius -/+
+* `C` -> color ON/OFF
+* `I` -> invertir tema (claro/oscuro)
+* `R` -> resembrar puntos (misma N, nueva semilla)
+* `O / U` -> siguiente / anterior fondo
+* `P` -> guardar screenshot en `images/output/`
+* `ESC` -> salir
+
+## 🌐 Variables de entorno
+
+### Ejecución general
+
+* `STIPPLE_AUTORUN=1` -> auto-run ON (default = 0)
+* `STIPPLE_MAX_ITERS=N` -> parar tras N iteraciones
+* `STIPPLE_METRICS=out.csv` -> guardar CSV con métricas
+
+### Puntos y semilla
+
+* `STIPPLE_NPOINTS=N` -> número inicial de puntos
+* `STIPPLE_SEED=N` -> semilla para reseed (default: 12345)
+
+### Gamma
+
+* `STIPPLE_GAMMA_START=g0` -> gamma inicial al arrancar (si no se define, usa `defaultGamma`).
+* `STIPPLE_GAMMA_END=g1` -> gamma objetivo para “sweep”; **junto con** `STIPPLE_GAMMA_STEP` activa el barrido.
+* `STIPPLE_GAMMA_STEP=dg` -> incremento/decremento por salto del sweep (positivo sube, negativo baja).
+* `STIPPLE_GAMMA_EVERY=k` -> aplica el cambio de gamma cada `k` iteraciones (default: `1`).
+
+### Fondo / imágenes
+
+* `STIPPLE_BG_SECONDS=s` -> cambiar fondo cada s segundos (0 = desactivar)
+
+### Color / tema
+
+* `STIPPLE_COLOR=1|0` -> con/sin color (default: 1)
+* `STIPPLE_INVERT=1|0` -> invertir tema (default: 0)
+
+### Paralelismo (solo versión omp)
+
+* `OMP_NUM_THREADS=N` -> número de hilos
+
+## 📊 Benchmarks
+
+En `tests/` tienes scripts para automatizar pruebas:
+
+### 🔁 Loop (`bench.sh`)
+
+Ejecuta secuencial y paralelo para distintos valores de **N**.
 
 ```bash
-STIPPLE_PARALLEL=1 OMP_NUM_THREADS=$(nproc) ./build/bin/stippling_demo -n 5000
+chmod +x tests/*.sh
+./tests/bench.sh --n-start 2000 --n-end 6000 --n-step 2000 --iters 100 --img images/input/doge.png
 ```
 
-- `-n 5000` -> número de puntos iniciales (opcional).
-- Si omites la imagen, usa la ruta por defecto de `include/config.h` (`defaultImagePath`).
+👉 CSV generados en:
 
-**Controles (teclado):**
+* `tests/bench/seq/run_NXXXX.csv`
+* `tests/bench/par/run_NXXXX.csv`
 
-- `SPACE` -> una iteración de Lloyd
-- `A` -> auto-run ON/OFF
-- `-` / `+` (también keypad) -> disminuir/aumentar `step` (pixelStride)
-- `G` / `H` -> subir/bajar `gamma`
-- `B` -> mostrar/ocultar fondo (imagen)
-- `Z` / `X` -> radio de punto -/+
-- `R` -> resembrar puntos (misma N, nueva semilla)
-- `P` -> guardar screenshot PNG del frame actual (en `images/output/`)
-- `U` / `O` -> anterior/siguiente `fondo`
-- `ESC` -> salir
-
-**Salidas:**
-
-- **Capturas**: `images/output/stipple_XXXXX.png` (cuando presionas `P`)
-
-## Modo test (batch) y recolección de métricas
-
-Permite correr iteraciones automáticamente y volcar **tiempos por iteración** a CSV.
-
-> Si **no** defines `STIPPLE_METRICS`, **no** se guarda ningún CSV (modo silencioso).
-
-### Ejecución básica (auto-run + CSV)
-
-```bash
-mkdir -p images/output/seq
-STIPPLE_AUTORUN=1 \
-STIPPLE_MAX_ITERS=1000 \
-STIPPLE_METRICS=images/output/seq/metrics.csv \
-./build/bin/stippling_demo -n 3000 images/input/twitch.png
-```
-
-**Variables de entorno soportadas:**
-
-| Variable            | Ejemplo                         | Descripción                                            |
-| ------------------- | ------------------------------- | ------------------------------------------------------ |
-| `STIPPLE_AUTORUN`   | `1`                             | Ejecuta una iteración de Lloyd en cada frame.          |
-| `STIPPLE_MAX_ITERS` | `1000`                          | Finaliza tras `K` iteraciones (ideal para benchmarks). |
-| `STIPPLE_METRICS`   | `images/output/seq/metrics.csv` | Activa logging de métricas por iteración.              |
-
-**Formato del CSV**
-Encabezado + filas por iteración:
+Incluyen:
 
 ```csv
 iter,ms,step,gamma,npoints
-1,12.444,3,1.000,3000
-2,12.887,3,1.000,3000
+1,6.540,3,1.000,3000
 ...
 ```
 
-- `iter`: número de iteración (1..K)
-- `ms`: tiempo de esa iteración (milisegundos)
-- `step`: `pixelStride` usado
-- `gamma`: gamma en ese instante
-- `npoints`: cantidad de puntos
+Parámetros editables vía entorno en el script:
+`gamma`, `color`, `minR`, `maxR`, `seed`, `iters`.
 
-## Modo test avanzado: **sweep de gamma** automático
+### 🔹 Ejecución única (`bench_once.sh`)
 
-Puedes variar `gamma` automáticamente cada N iteraciones usando variables de entorno.
-
-> Esto modifica **gamma durante la ejecución** y el valor queda **registrado** en el CSV.
+Ejecuta solo un valor de **N**, con timestamp en el nombre del CSV.
 
 ```bash
-mkdir -p images/output/seq
-STIPPLE_AUTORUN=1 \
-STIPPLE_MAX_ITERS=120 \
-STIPPLE_METRICS=images/output/seq/metrics.csv \
-STIPPLE_GAMMA_START=1.0 \
-STIPPLE_GAMMA_END=1.8 \
-STIPPLE_GAMMA_STEP=0.05 \
-STIPPLE_GAMMA_EVERY=10 \
-./build/bin/stippling_demo -n 3000 images/input/twitch.png
+./tests/bench_once.sh --n 4000 --iters 50 --img images/input/doge.png
 ```
 
-**Variables del sweep de gamma:**
+👉 Resultados en `tests/bench_once/{seq,par}/run_N4000_<fecha>.csv`
 
-| Variable              | Requerido | Ejemplo | Significado                                                   |
-| --------------------- | --------- | ------- | ------------------------------------------------------------- |
-| `STIPPLE_GAMMA_END`   | ✔         | `1.8`   | Gamma objetivo final del sweep.                               |
-| `STIPPLE_GAMMA_STEP`  | ✔         | `0.05`  | Incremento (o decremento, si negativo) por salto.             |
-| `STIPPLE_GAMMA_START` | ✖         | `1.0`   | Valor inicial (si no se define, parte del gamma actual).      |
-| `STIPPLE_GAMMA_EVERY` | ✖         | `10`    | Aplica el cambio de gamma cada `N` iteraciones (default = 1). |
+### 📐 Comparación (`compare.sh`)
 
-**Ejemplo explicado:**
+Compara dos CSV y muestra speedup:
 
-Con los valores de arriba, gamma avanza:
+```bash
+./tests/compare.sh tests/bench/seq/run_N2000.csv tests/bench/par/run_N2000.csv
+```
 
-`1.00, 1.05, 1.10, ...` **cada 10 iteraciones**, hasta `1.80`.
+Salida con colores:
 
-En el CSV verás cómo `gamma` cambia en las filas correspondientes.
-
-> Nota: también puedes usar valores grandes (p. ej. `STIPPLE_GAMMA_END=5.0`), pero no suele ser útil visualmente.
-
-## Notas técnicas
-
-- Muestreo de luminancia **bilineal** en UV + conversión **sRGB -> lineal** para ponderar correctamente.
-- Búsqueda de vecino más cercano acelerada con **grilla uniforme**.
-- `step` controla el stride de muestreo (mayor = más rápido, menos preciso).
-- `gamma > 1` acentúa sombras (más puntos en zonas oscuras).
+```bash
+Promedio ms (SEQ): 6.550
+Promedio ms (OMP): 4.230
+Speedup SEQ/OMP  : 1.55x
+```

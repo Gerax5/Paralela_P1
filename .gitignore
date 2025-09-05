@@ -72,3 +72,6 @@ images/output/**
 !images/output/.gitkeep
 .markdownlint.json
 tests/data/
+tests/bench_once/
+tests/bench/
+
