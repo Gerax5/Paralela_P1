@@ -15,7 +15,7 @@ sequenceDiagram
     participant CSV as utils.c (CSV)
     participant Rend as Renderer (SDL)
 
-    User->>CLI: ./stippling_seq|omp [args] + ENV
+    User->>CLI: ./stippling_seq|para [args] + ENV
     Note right of CLI: Captura de argumentos <br/>(-n, -w, -h, -g, imagen...)<br/>y variables de entorno (AUTORUN, MAX_ITERS, METRICS, COLOR, MINR, MAXR, SEED, BG_SECONDS, ...)
 
     CLI->>App: appInit(width,height,title,imgPath,npoints)
