@@ -523,43 +523,42 @@ bool appInit(App **outApp, int width, int height, const char *title,
   app->w = (width > 0) ? width : defaultWidth;
   app->h = (height > 0) ? height : defaultHeight;
 
-  // Defaults de ejecución/visualización
-  app->autoRun = true;
+  // --- Defaults de ejecución/visualización (arranque pausado y reproducible)
+  app->autoRun = false; // inicia PAUSADO (no se auto-ordena)
   app->iters = 0;
   app->pixelStride = defaultLloydStep;
   app->gammaW = defaultGamma;
-
-  app->seed = (unsigned)SDL_GetTicks();
+  app->seed = 12345; // semilla fija por defecto para pruebas
 
   app->colorPoints = true;  // arranca con color
   app->invertTheme = false; // fondo oscuro por defecto
-  app->minRadius = 0.8f;    // ajustable en runtime
+  app->minRadius = 0.8f;    // radios usados en render "styled"
   app->maxRadius = 3.0f;
 
-  app->showBg = false;         // mostrar imagen de fondo (toggle con 'B')
-  app->dotRadius = 2;          // radio visual de los puntos (solo render)
-  app->wantScreenshot = false; // sin captura pendiente
+  app->showBg = false; // mostrar imagen de fondo (toggle con 'B')
+  app->dotRadius = 2;  // (ya no se usa para Z/X; puedes eliminarlo luego)
+  app->wantScreenshot = false;
 
-  // Modo batch + logging (variables de entorno)
+  // Modo batch + logging
   app->maxIters = 0;
   app->metricsPath = NULL;
 
-  // Rotación automática de fondos
+  // --- Rotación automática de fondos (DESACTIVADA por defecto)
   app->bgTimer = 0.0;
-  app->bgPeriod = 20.0; // cada 20s por defecto
+  app->bgPeriod = 0.0; // 0 => sin rotación
   const char *env_bg = getenv("STIPPLE_BG_SECONDS");
   if (env_bg)
   {
     double v = atof(env_bg);
-    if (v > 0.0)
-      app->bgPeriod = v;
+    app->bgPeriod = (v > 0.0) ? v : 0.0; // 0 o menor => desactiva
   }
 
+  // Flags de entorno opcionales
   const char *env_auto = getenv("STIPPLE_AUTORUN");   // "1" para auto
-  const char *env_maxi = getenv("STIPPLE_MAX_ITERS"); // p.ej. "300"
+  const char *env_maxi = getenv("STIPPLE_MAX_ITERS"); // "300", etc.
   const char *env_csv = getenv("STIPPLE_METRICS");    // ruta CSV
 
-  // Barrido de gamma (opcional)
+  // --- Barrido de gamma (opcional, NO reactiva autorun)
   app->sweepGamma = false;
   app->gStart = app->gEnd = 0.f;
   app->gStep = 0.f;
@@ -580,15 +579,13 @@ bool appInit(App **outApp, int width, int height, const char *title,
     if (env_gstart)
     {
       app->gStart = (float)atof(env_gstart);
-      app->gammaW = app->gStart; // arrancar desde START
+      app->gammaW = app->gStart; // arrancar desde START si se da
     }
     else
     {
       app->gStart = app->gammaW; // si no hay START, parte del gamma actual
     }
-
-    if (!app->autoRun)
-      app->autoRun = true;
+    // IMPORTANTE: NO encender autorun aquí.
   }
 
   if (env_auto && *env_auto == '1')
@@ -681,10 +678,25 @@ bool appInit(App **outApp, int width, int height, const char *title,
   app->fpsTex = NULL;
   app->fpsTexW = app->fpsTexH = 0;
 
-  // Ayuda rapida en consola
-  printf("[SPACE] paso Lloyd | [A] auto | [-]/[+] step | [G]/[H] gamma | [B] fondo | "
-         "[Z]/[X] radio | [R] reseed | [P] screenshot | "
-         "[C] color ON/OFF | [I] tema | [N]/[M] minR -/+ | [,]/[.] maxR -/+\n");
+  // Ayuda rápida en consola
+  printf(
+      "Controles:\n"
+      "  SPACE  una iteracion de Lloyd\n"
+      "  A      auto ON/OFF\n"
+      "  G/H    gamma up/down\n"
+      "  B      fondo ON/OFF\n"
+      "  Z/X    escalar min/max radios ↓/↑\n"
+      "  N/M    minRadius -/+\n"
+      "  ,/.    maxRadius -/+\n"
+      "  C      color ON/OFF\n"
+      "  I      tema\n"
+      "  R      reseed (misma N)\n"
+      "  P      screenshot\n"
+      "  O/U    fondo siguiente/anterior\n"
+      "  ESC    salir\n");
+  printf("Autorun inicial: %s | Rotacion fondo: %s\n",
+         app->autoRun ? "ON" : "OFF",
+         (app->bgPeriod > 0.0) ? "ON" : "OFF");
   fflush(stdout);
 
   *outApp = app;
@@ -784,20 +796,6 @@ void appRun(App *app)
           updateFpsTitle(app); // feedback inmediato
         }
 
-        // Granularidad de muestreo: step-- / step++
-        if (sym == SDLK_MINUS || sym == SDLK_KP_MINUS)
-        {
-          if (app->pixelStride > 1)
-            app->pixelStride--;
-          updateFpsTitle(app);
-        }
-        if (sym == SDLK_PLUS || sym == SDLK_KP_PLUS || sym == SDLK_EQUALS)
-        {
-          if (app->pixelStride < 64)
-            app->pixelStride++;
-          updateFpsTitle(app);
-        }
-
         // Gamma (peso de oscuridad)
         if (sym == SDLK_g)
         {
@@ -817,21 +815,21 @@ void appRun(App *app)
           updateFpsTitle(app);
         }
 
-        // Radio visual de puntos (solo render)
+        // Radios (Z/X ahora escalan min/max en bloque)
         if (sym == SDLK_z)
         {
-          if (app->dotRadius > 1)
-            app->dotRadius--;
+          app->minRadius = fmaxf(0.5f, app->minRadius - 0.1f);
+          app->maxRadius = fmaxf(app->minRadius, app->maxRadius - 0.1f);
           updateFpsTitle(app);
         }
         if (sym == SDLK_x)
         {
-          if (app->dotRadius < 20)
-            app->dotRadius++;
+          app->maxRadius = fminf(20.f, app->maxRadius + 0.1f);
+          app->minRadius = fminf(app->maxRadius, app->minRadius + 0.1f);
           updateFpsTitle(app);
         }
 
-        // Siguiente fondo: 'o'
+        // Siguiente fondo: 'o' (con reseed y reset iter)
         if (sym == SDLK_o)
         {
           int n = app->stip.count; // conservar N actual
@@ -842,7 +840,7 @@ void appRun(App *app)
           updateFpsTitle(app);
         }
 
-        // Fondo anterior: 'u'
+        // Fondo anterior: 'u' (sin reseed)
         if (sym == SDLK_u)
         {
           appPrevBackground(app);
@@ -913,14 +911,14 @@ void appRun(App *app)
       }
     }
 
-    // 2) SIMULACION / TIEMPO
+    // 2) SIMULACIÓN / TIEMPO
     Uint64 now = SDL_GetPerformanceCounter();
     double dt = (double)(now - app->last) / (double)app->freq; // segundos reales
     app->last = now;
     app->accTime += dt;
     app->frames++;
 
-    // Rotación automática de fondo + reseed
+    // Rotación automática de fondo + reseed (solo si está activada)
     if (app->bgPeriod > 0.0)
     {
       app->bgTimer += dt;
@@ -938,7 +936,7 @@ void appRun(App *app)
       }
     }
 
-    // Modo automático: un paso de Lloyd por frame
+    // Modo automático: un paso de Lloyd por frame (solo si autoRun = true)
     if (app->autoRun)
     {
       uint64_t t0 = util_now_ns();
@@ -978,13 +976,11 @@ void appRun(App *app)
     // 3) RENDER
     if (app->showBg && app->imageTex)
     {
-      // La imagen de fondo cubre la ventana completa
       SDL_Rect dst = {0, 0, app->w, app->h};
       SDL_RenderCopy(app->ren, app->imageTex, NULL, &dst);
     }
     else
     {
-      // fondo sólido según tema (un solo clear)
       if (app->invertTheme)
         SDL_SetRenderDrawColor(app->ren, 245, 245, 245, 255);
       else
@@ -998,10 +994,10 @@ void appRun(App *app)
                           app->minRadius, app->maxRadius,
                           app->colorPoints, app->invertTheme);
 
-    // Captura al final del frame para incluir todo lo dibujado
+    // Captura al final del frame
     if (app->wantScreenshot)
     {
-      (void)saveScreenshot(app); // si falla, ya loguea el motivo
+      (void)saveScreenshot(app);
       app->wantScreenshot = false;
     }
 
