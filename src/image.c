@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <math.h>
 #include "image.h"
-#include <omp.h>
+// #include <omp.h>
 
 /**
  * srgbToLinear01
@@ -141,7 +141,7 @@ void imageFree(Image *img)
 
   if (img->surface) // liberar surface si existe
     SDL_FreeSurface(img->surface);
-  
+
   free(img->luma);
 
   // dejar en estado neutro
@@ -193,17 +193,18 @@ void imageBuildLuma(Image *img)
   const int H = img->h;
 
   // Relleno en paralelo (si se compila con OpenMP)
-  #pragma omp parallel for schedule(static)
+  // #pragma omp parallel for schedule(static)
   for (int y = 0; y < H; ++y)
   {
     const Uint32 *rowPx = img->pixels + (size_t)y * (size_t)img->pitchPixels;
-    float *rowY         = img->luma   + (size_t)y * (size_t)W;
-    
+    float *rowY = img->luma + (size_t)y * (size_t)W;
+
     for (int x = 0; x < W; ++x)
     {
       const Uint32 px = rowPx[x];
 
-      Uint8 R8, G8, B8, A; (void)A;
+      Uint8 R8, G8, B8, A;
+      (void)A;
       SDL_GetRGBA(px, img->surface->format, &R8, &G8, &B8, &A);
 
       const float Rs = R8 / 255.0f;
