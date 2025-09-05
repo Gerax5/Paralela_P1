@@ -28,7 +28,7 @@ make clean && make
 Esto genera:
 
 * `build/bin/stippling_seq` -> versión secuencial
-* `build/bin/stippling_omp` -> versión paralela (OpenMP)
+* `build/bin/stippling_par` -> versión paralela (OpenMP)
 
 ## ▶️ Ejecución interactiva
 
