@@ -1,62 +1,95 @@
-TARGET := build/bin/stippling_demo
-SRC    := src/main.c src/app.c src/image.c src/stippling_parallel.c src/lloyd.c src/voronoi_parallel.c src/utils.c
-OBJ    := $(patsubst src/%.c,build/obj/%.o,$(SRC))
-N      ?= 5000
+# =========================
+# Proyecto Voronoi Stippling
+# Compila binarios: secuencial y paralelo (OpenMP)
+# =========================
 
-# --- compi y OMP ---
-CC        := gcc
-
-# Núcleos disponibles por defecto
+# --- Detectar hilos disponibles (para ejecución) ---
 THREADS ?= $(shell \
   (getconf _NPROCESSORS_ONLN) 2>/dev/null || \
   (nproc) 2>/dev/null || \
   (sysctl -n hw.ncpu) 2>/dev/null || echo 8)
 
-OMP_FLAGS := -fopenmp
+# --- Binarios ---
+BIN_DIR      := build/bin
+OBJ_DIR      := build/obj
+SEQ_BIN      := $(BIN_DIR)/stippling_seq
+OMP_BIN      := $(BIN_DIR)/stippling_par
 
-CFLAGS  := -std=c11 -O2 -Wall -Wextra -D_POSIX_C_SOURCE=200809L -Iinclude -fopenmp
-LDFLAGS :=
-LDLIBS  := -fopenmp
+# --- Fuentes comunes ---
+COMMON_SRCS  := src/main.c src/app.c src/image.c src/utils.c
 
-SDL2_CFLAGS     := $(shell sdl2-config --cflags)
-SDL2_LIBS       := $(shell sdl2-config --libs)
-IMG_TTF_CFLAGS  := $(shell pkg-config --cflags SDL2_image SDL2_ttf)
-IMG_TTF_LIBS    := $(shell pkg-config --libs SDL2_image SDL2_ttf)
+# --- Fuentes específicas ---
+SEQ_SRCS     := src/lloyd.c src/voronoi.c src/stippling.c
+OMP_SRCS     := src/lloyd_parallel.c src/voronoi_parallel.c src/stippling_parallel.c
 
-CFLAGS += $(SDL2_CFLAGS) $(IMG_TTF_CFLAGS) $(OMP_FLAGS) -MMD -MP
-LDLIBS += $(SDL2_LIBS) $(IMG_TTF_LIBS) -lm $(OMP_FLAGS)
+# --- Objetos (separados por variante) ---
+SEQ_OBJS     := $(patsubst src/%.c,$(OBJ_DIR)/seq/%.o,$(COMMON_SRCS) $(SEQ_SRCS))
+OMP_OBJS     := $(patsubst src/%.c,$(OBJ_DIR)/omp/%.o,$(COMMON_SRCS) $(OMP_SRCS))
 
-.PHONY: all run run-par start clean rebuild dirs
+# --- Compilador y flags ---
+CC           := gcc
+CSTD         := -std=c11
+WARN         := -Wall -Wextra
+OPT          := -O2 -march=native
+DEFS         := -D_POSIX_C_SOURCE=200809L
+INCLUDES     := -Iinclude
+DEPFLAGS     := -MMD -MP
 
-# Por defecto: solo compila
-all: $(TARGET)
+# SDL / PNG / TTF
+SDL2_CFLAGS  := $(shell sdl2-config --cflags)
+SDL2_LIBS    := $(shell sdl2-config --libs)
+IMG_TTF_CFLAGS := $(shell pkg-config --cflags SDL2_image SDL2_ttf)
+IMG_TTF_LIBS   := $(shell pkg-config --libs SDL2_image SDL2_ttf)
 
-run: all
-	@echo "Build listo: $(TARGET)"
+# Base (secuencial)
+CFLAGS_BASE  := $(CSTD) $(WARN) $(OPT) $(DEFS) $(INCLUDES) $(SDL2_CFLAGS) $(IMG_TTF_CFLAGS) $(DEPFLAGS)
+LDLIBS_BASE  := $(SDL2_LIBS) $(IMG_TTF_LIBS) -lm
 
-# corre en paralelo (OMP); cambia hilos con: make run-par THREADS=12
-run-par: all
-	STIPPLE_PARALLEL=1 OMP_NUM_THREADS=$(THREADS) $(TARGET) -n ${N}
+# Paralelo (añade OpenMP)
+OMPFLAGS     := -fopenmp
+CFLAGS_OMP   := $(CFLAGS_BASE) $(OMPFLAGS)
+LDLIBS_OMP   := $(LDLIBS_BASE) $(OMPFLAGS)
 
-start: $(TARGET)
-	@echo "Ejecutando $(TARGET)"
-	$(TARGET)
+# --- Targets por defecto ---
+.PHONY: all clean rebuild run-seq run-omp dirs
+all: $(SEQ_BIN) $(OMP_BIN)
 
-$(TARGET): | dirs $(OBJ)
+# --- Enlaces ---
+$(SEQ_BIN): $(SEQ_OBJS) | dirs
 	@mkdir -p $(dir $@)
-	$(CC) $(LDFLAGS) $(OBJ) -o $@ $(LDLIBS)
+	$(CC) $(SEQ_OBJS) -o $@ $(LDLIBS_BASE)
 
-build/obj/%.o: src/%.c | dirs
+$(OMP_BIN): $(OMP_OBJS) | dirs
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(OMP_OBJS) -o $@ $(LDLIBS_OMP)
 
+# --- Compilación (objetos separados por variante) ---
+$(OBJ_DIR)/seq/%.o: src/%.c | dirs
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS_BASE) -c $< -o $@
+
+$(OBJ_DIR)/omp/%.o: src/%.c | dirs
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS_OMP) -c $< -o $@
+
+# --- Utilidades ---
 dirs:
-	@mkdir -p build/obj
+	@mkdir -p $(BIN_DIR) $(OBJ_DIR)/seq $(OBJ_DIR)/omp
 
 clean:
 	@$(RM) -r build
 
 rebuild: clean all
 
-# incluir dependencias automáticas
--include $(OBJ:.o=.d)
+# --- Ejecución rápida ---
+# Cambia hilos con: make run-omp THREADS=12
+N ?= 5000
+run-seq: $(SEQ_BIN)
+	$(SEQ_BIN) -n $(N)
+
+run-omp: $(OMP_BIN)
+	OMP_NUM_THREADS=$(THREADS) $(OMP_BIN) -n $(N)
+
+# --- Dependencias automáticas ---
+-include $(SEQ_OBJS:.o=.d)
+-include $(OMP_OBJS:.o=.d)
