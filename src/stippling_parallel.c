@@ -3,40 +3,16 @@
 #include "stippling.h"
 #include "image.h"
 
-/**
- * frand01
- * -------
- * Genera un float pseudoaleatorio en [0, 1] usando un LCG de 32 bits.
- *
- * Descripción:
- *   Avanza el generador congruencial lineal y devuelve un valor normalizado
- *   empleando los 24 bits altos del estado para reducir correlaciones.
- *
- * Parámetros:
- *   st -> puntero al estado interno del RNG; se actualiza in-place.
- *
- * Retorna:
- *   Valor pseudoaleatorio en [0, 1]. El 1.0 es posible (raro). Si necesitas
- *   estrictamente [0, 1), usa 16777216.0f (2^24) como divisor o resta un ε.
- *
- * Notas:
- *   - Determinista (misma semilla -> misma secuencia); no cripto-seguro.
- *   - Fórmula LCG (Numerical Recipes): state = state * 1664525 + 1013904223.
- */
-static float frand01(unsigned *st)
-{
-  // Avanza el LCG
-  *st = (*st * 1664525u + 1013904223u);
-
-  // Normaliza a [0, 1] usando 24 bits de precisión
-  return ((*st >> 8) & 0xFFFFFFu) / (float)0xFFFFFFu;
-}
-
-
-
 /* calcular bits para */
-static inline uint32_t xorshift32(uint32_t *s){ uint32_t x=*s; x^=x<<13; x^=x>>17; x^=x<<5; return *s=x; }
-static inline float frand01_xs(uint32_t *s){ return (xorshift32(s) >> 8) * (1.0f/16777216.0f); } // [0,1)
+static inline uint32_t xorshift32(uint32_t *s)
+{
+  uint32_t x = *s;
+  x ^= x << 13;
+  x ^= x >> 17;
+  x ^= x << 5;
+  return *s = x;
+}
+static inline float frand01_xs(uint32_t *s) { return (xorshift32(s) >> 8) * (1.0f / 16777216.0f); } // [0,1)
 
 /**
  * stipplingInit
@@ -66,19 +42,25 @@ static inline float frand01_xs(uint32_t *s){ return (xorshift32(s) >> 8) * (1.0f
  */
 bool stipplingInit(Stippling *s, int n, int w, int h, unsigned seed)
 {
-  if (!s || n <= 0 || w <= 0 || h <= 0) return false;
-  s->pts = (Dot*)malloc(sizeof(Dot)*(size_t)n);
-  if (!s->pts) return false;
+  if (!s || n <= 0 || w <= 0 || h <= 0)
+    return false;
+  s->pts = (Dot *)malloc(sizeof(Dot) * (size_t)n);
+  if (!s->pts)
+    return false;
 
-  s->count = n; s->width = w; s->height = h;
+  s->count = n;
+  s->width = w;
+  s->height = h;
 
-  #pragma omp parallel for schedule(static)
-  for (int i = 0; i < n; ++i) {
+#pragma omp parallel for schedule(static)
+  for (int i = 0; i < n; ++i)
+  {
     // Semilla por punto (determinista): mezcla índice + seed
     uint32_t st = 0x9E3779B9u ^ (uint32_t)seed ^ (uint32_t)i * 0x85EBCA6Bu;
     float x = frand01_xs(&st) * (float)w;
     float y = frand01_xs(&st) * (float)h;
-    s->pts[i].x = x; s->pts[i].y = y;
+    s->pts[i].x = x;
+    s->pts[i].y = y;
   }
   return true;
 }
