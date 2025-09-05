@@ -1,198 +1,244 @@
 # API de headers – Voronoi Stippling
 
-> Convenciones
->
-> - Coordenadas en píxeles, origen arriba-izquierda.
-> - Rangos válidos: `x ∈ [0,w)`, `y ∈ [0,h)`.
-> - Todas las funciones `bool` retornan `true` en éxito, `false` en error.
-> - Punteros de salida: no deben ser `NULL`.
+## Flujo general
 
-## `include/app.h`
+1. **Captura de argumentos** (CLI) y **variables de entorno**
 
-**Rol:** ciclo de vida (init → loop → shutdown).
+   * CLI: `-n`, imagen, etc. (ver README).
+   * Entorno: `STIPPLE_*` (autorun, gamma, métricas, semilla, radios, color/tema, fondo, etc.).
+2. **Programación defensiva**
+
+   * Defaults si `width/height ≤ 0`, `npoints ≤ 0`, `title == NULL`.
+   * Validación de rutas de imagen; fallback a imagen por defecto.
+   * Clamps en radios y `step ≥ 1`.
+3. **Inicialización** (`appInit`)
+
+   * SDL/SDL_image/TTF, ventana + renderer.
+   * Carga/creación de textura de fondo.
+   * Siembra de puntos (`stipplingInit`) con semilla controlable.
+   * Overlay y timers.
+4. **Bucle principal** (`appRun`)
+
+   * **Entrada**: teclado (SPACE, A, B, Z/X, N/M, ,/., C, I, U/O, P, ESC).
+   * **Simulación**:
+
+     * **Secuencial**: `lloydStep(...)` por SPACE o cada frame si `autoRun`.
+     * **Paralelo** (en binario OMP): misma semántica pero con acumuladores por hilo y reducción.
+     * **Sweep de gamma** opcional.
+     * **Métricas CSV** si `STIPPLE_METRICS` está activo.
+   * **Render**: fondo + puntos (con/ sin color, tema invertido).
+   * **Screenshots**: PNG bajo demanda (tecla `P`).
+   * **Rotación de fondos** (si `STIPPLE_BG_SECONDS>0`, con reseed).
+5. **Salida limpia** (`appShutdown`)
+
+   * Liberación ordenada de recursos (texturas, fuentes, superficies, puntos) y cierre de subsistemas.
+
+## Rol por módulo
+
+* **app**: orquesta el ciclo de vida, entrada, timing, logging y render.
+* **image**: I/O de imagen y muestreo bilineal (color/intensidad).
+* **stippling**: almacenamiento de la nube y render estilizado.
+* **lloyd**: núcleo de Lloyd (CVD); calcula centroides ponderados y actualiza puntos.
+* **voronoi**: índice espacial (grilla) para NN rápido; fallback a O(N).
+* **utils**: tiempos de alta resolución y utilitario CSV.
+
+## Secciones paralelas y sincronía (en binario OMP)
+
+* **Paralelización**: doble bucle del lienzo (x,y) con `collapse(2)` y **acumuladores privados por hilo**: `sumXlocal`, `sumYlocal`, `sumWlocal` (tamaño `T×N`).
+* **Sincronía**:
+  * **No** hay locks en el inner loop (cada hilo escribe solo en su “rebanada”).
+  * **Reducción final** secuencial `T×N -> N` (suma de buffers).
+  * La **barrera implícita** de fin de región paralela asegura que todos los hilos terminaron antes de reducir y normalizar.
+* **Coherencia**: misma semántica que la versión secuencial; no se alteran decisiones numéricas (mismos pesos, mismo NN).
+
+## Despliegue de resultados
+
+* **Ventana**: título con FPS/iters/step/gamma/radios y overlay.
+* **PNG**: capturas a `images/output/`.
+* **CSV**: métricas por iteración con cabecera estándar:
+  `iter,ms,step,gamma,npoints`.
+
+## Convenciones
+
+**Errores y defensiva:**
+
+* Validación temprana de punteros/ rangos (retornos `bool`).
+* Defaults robustos (dimensiones, N, gamma, radios).
+* Mensajes claros a `stderr` al fallar (carga de imagen, SDL, TTF, etc.).
+
+**Memoria y ownership:**
+
+* Quien **crea** libera: `imageLoad/imageFree`, `stipplingInit/stipplingFree`, `appInit/appShutdown`.
+* Cadenas duplicadas con `strdup()` cuando la App toma propiedad (lista de fondos).
+
+**Rendimiento:**
+
+* `gridBuild` acelera NN; fallback O(N) si no hay candidatos.
+* Muestreo **bilineal** (evita aliasing); `step` controla densidad de muestreo.
+* En OMP, evitar contención: **acumuladores por hilo** + **reducción**.
+
+**Determinismo:**
+
+* Semilla controlable (`STIPPLE_SEED`) para reproducibilidad de pruebas; si no se pasa, se usa default definido en código.
+
+**Interfaz de ejecución:**
+
+* **CLI** mínima: `-n <puntos>` y `<imagen>` opcional; el resto por **variables de entorno** `STIPPLE_*`.
+* Controles en runtime (A/SPACE/B/Z/X/N/M/,/.) para experimentar sin recompilar.
+
+## app.h — Ciclo de vida y fondos
+
+### `typedef struct App App;`
+
+* **Entradas/Salidas**: —
+* **Descripción**: tipo opaco que encapsula el estado global de la app (ventana, renderer, imagen, nube de puntos, UI, etc.).
+
+### `bool appInit(App **outApp, int width, int height, const char *title, const char *imagePath, int npoints);`
+
+* **Entradas**:
+
+  * `outApp` (`App**`): salida por referencia.
+  * `width, height` (`int`): tamaño ventana (usa defaults si ≤0).
+  * `title` (`const char*`): título ventana (usa default si `NULL`).
+  * `imagePath` (`const char*`): ruta de imagen (usa default si `NULL`).
+  * `npoints` (`int`): número inicial de puntos (usa default si ≤0).
+* **Salidas**: `true/false` éxito.
+* **Descripción**: inicializa SDL/SDL_image/TTF, crea ventana/renderer, carga imagen y siembra la nube de puntos.
+
+### `void appRun(App *app);`
+
+* **Entradas**: `app` (`App*`).
+* **Salidas**: —
+* **Descripción**: bucle principal; procesa eventos, ejecuta Lloyd (manual/auto), renderiza y registra métricas si está habilitado.
+
+### `void appShutdown(App *app);`
+
+* **Entradas**: `app` (`App*`).
+* **Salidas**: —
+* **Descripción**: libera recursos (texturas, fuentes, imagen, nube de puntos) y cierra subsistemas.
+
+### Fondos (rotación)
+
+* `bool appSetBackgroundList(App *app, int count, const char *const *paths);`
+  **In**: `app`, `count`, `paths[]`. **Out**: `true/false`. **Desc.**: define lista de fondos y carga el primero.
+* `void appNextBackground(App *app);` / `void appPrevBackground(App *app);`
+  **In**: `app`. **Out**: —. **Desc.**: avanza/retrocede en la lista circular y carga.
+
+## config.h — Defaults de ejecución
+
+### Constantes principales
+
+* `defaultWidth`, `defaultHeight` (`int`): tamaño inicial ventana.
+* `defaultTitle` (`const char[]`): título por defecto.
+* `defaultImagePath` (`const char[]`) y `defaultBgPaths[]` + `defaultBgCount`: imagen por defecto y lista rotatoria.
+* `defaultNPoints` (`int`): número inicial de puntos.
+* `defaultGamma` (`float`): gamma del peso.
+* `defaultLloydStep` (`int`): stride de muestreo del lienzo.
+  **Uso**: proveen valores por defecto si no se especifican por CLI/entorno.
+
+## image.h — Carga y muestreo de imagen
+
+### `typedef struct Image { SDL_Surface *surface; int width, height; uint32_t *pixels; } Image;`
+
+* **Descripción**: envoltorio para `SDL_Surface` + acceso directo a pixeles RGBA.
+
+### `bool imageLoad(Image *img, const char *path);`
+
+* **In**: `img`, `path`. **Out**: `true/false`.
+* **Desc.**: carga PNG/JPG, garantiza formato RGBA y rellena metadatos.
+
+### `void imageFree(Image *img);`
+
+* **In**: `img`. **Out**: —.
+* **Desc.**: libera `SDL_Surface` y limpia campos.
+
+### `uint32_t imageSampleBilinear(const Image *img, float u, float v);`
+
+* **In**: `img`, coords normalizadas `u,v` \[0..1]. **Out**: `RGBA` empaquetado.
+* **Desc.**: muestreo bilineal de color.
+
+### `float sampleIntensityBilinearUV(const Image *img, float u, float v);`
+
+* **In**: `img`, `u,v`. **Out**: luminancia \[0..1].
+* **Desc.**: muestreo bilineal de intensidad (rec.709).
+
+### `SDL_Texture *imageCreateTexture(SDL_Renderer *ren, const Image *img);`
+
+* **In**: `ren`, `img`. **Out**: `SDL_Texture*` (o `NULL`).
+* **Desc.**: crea textura renderizable desde `Image`.
+
+## stippling.h — Nube de puntos y render
+
+### Estructuras
+
+* `struct StipplePoint { float x,y; uint8_t r,g,b,a; };`
+  **Desc.**: punto con posición y color/alpha.
+* `typedef struct { struct StipplePoint *pts; int count; float *accumW; } Stippling;`
+  **Desc.**: contenedor de puntos; `accumW` acumula pesos por punto.
+
+### Funciones
+
+* `bool stipplingInit(Stippling *s, int count, int W, int H, unsigned seed);`
+  **In**: `s`, `count`, `W,H`, `seed`. **Out**: `true/false`.
+  **Desc.**: reserva y siembra puntos iniciales en el canvas.
+* `void stipplingFree(Stippling *s);`
+  **In**: `s`. **Out**: —.
+  **Desc.**: libera buffers asociados.
+* `void stipplingRenderStyled(const Stippling *s, SDL_Renderer *ren, int W, int H, const Image *img, float minRadius, float maxRadius, bool colorPoints, bool invertTheme);`
+  **In**: `s`, `ren`, `W,H`, `img`, `minRadius`, `maxRadius`, `colorPoints`, `invertTheme`. **Out**: —.
+  **Desc.**: dibuja la nube (puntillismo) con radio por intensidad/color y tema visual.
+
+## lloyd.h — Iteración de Lloyd + utilidades RNG
+
+### Utilidades RNG
+
+* `static inline unsigned lcg(unsigned *st);`
+  **In**: `st` (estado). **Out**: nuevo estado (32b).
+  **Desc.**: generador congruencial lineal rápido (no cripto).
+* `static inline int irand_range(unsigned *st, int hi);`
+  **In**: `st`, `hi>0`. **Out**: entero `[0,hi)`.
+  **Desc.**: pseudo-aleatorio uniforme approx. por módulo.
+
+### Lloyd
+
+* `bool lloydStep(const Image *img, Stippling *s, int W, int H, int step, float gamma);`
+  **In**: `img` (campo de densidad), `s` (puntos), `W,H` (canvas), `step≥1` (stride), `gamma` (exponente).
+  **Out**: `true/false` éxito.
+  **Desc.**: una iteración de Lloyd (Centroidal Voronoi); para cada muestra (cada `step` px) acumula centroide ponderado por luminancia y actualiza cada punto al centro de masa; maneja huérfanos con re-seed.
+
+## voronoi.h — Índice espacial (grid uniforme)
 
 ### Tipos
 
-```c
-typedef struct App App;  /* tipo opaco */
-````
+* `typedef struct UniformGrid { ... } UniformGrid;` – grilla 2D con celdas y listas de índices.
+* `typedef struct GridEntry { int pindex; int pad; } GridEntry;` – elemento por celda.
 
 ### Funciones
 
-```c
-bool appInit(App **outApp,
-             int width, int height,
-             const char *title,
-             const char *imagePath,
-             int npoints);
-```
+* `bool gridBuild(UniformGrid *g, int W, int H, int cell, const Stippling *s);`
+  **In**: `g`, dimensiones `W,H`, tamaño de celda `cell`, puntos `s`. **Out**: `true/false`.
+  **Desc.**: construye índice uniforme para acelerar NN.
+* `int gridNearest(const UniformGrid *g, const Stippling *s, float x, float y, int maxRing);`
+  **In**: `g`, `s`, posición `(x,y)`, anillos `maxRing`. **Out**: índice de punto más cercano o `<0` si no hay.
+  **Desc.**: búsqueda de vecino más cercano explorando celdas por anillos.
+* `void gridFree(UniformGrid *g);`
+  **In**: `g`. **Out**: —.
+  **Desc.**: libera memoria del índice.
 
-- Crea ventana/renderer (SDL2), inicializa SDL_image, carga imagen (`imagePath` o `defaultImagePath`) e inicializa la nube con `npoints` (o `defaultNPoints`).
+## utils.h — Tiempos y CSV
 
-```c
-void appRun(App *app);
-```
+### `uint64_t util_now_ns(void);`
 
-- Bucle principal: eventos → paso(s) de Lloyd (manual/auto) → render.
+* **Entradas**: —. **Salidas**: `nanosegundos` desde reloj de alto-resolución.
+* **Descripción**: timestamp monotónico para medir iteraciones.
 
-```c
-void appShutdown(App *app);
-```
+### `double util_ns_to_ms(uint64_t ns);`
 
-- Libera puntos, texturas/superficies, renderer/ventana y cierra SDL/SDL_image.
+* **Entradas**: `ns` (nanosegundos). **Salidas**: `ms` (double).
+* **Descripción**: conversión de unidades.
 
-**Controles (runtime):**
+### `void util_csv_append(const char *path, const char *header, const char *rowfmt, ...);`
 
-- `SPACE` paso Lloyd
-- `A` auto
-- `-`/`+` step
-- `G`/`H` gamma
-- `B` fondo
-- `Z`/`X` radio
-- `R` reseed
-- `P` screenshot
-- `C` color ON/OFF
-- `I` tema
-- `N`/`M` minR -/+
-- `,`/`.` maxR -/+
-- `ESC` salir.
-
-## `include/config.h`
-
-**Rol:** defaults (fallback si no se pasan por CLI).
-
-```c
-#define defaultWidth     800
-#define defaultHeight    600
-#define defaultTitle     "Voronoi Stippling - bootstrap"
-#define defaultImagePath "images/input/twitch.png"
-
-#define defaultNPoints   1000
-#define defaultLloydStep 3     /* k de muestreo; 1 preciso, 3–4 rápido */
-#define defaultGamma     1.0f  /* exp. del peso */
-```
-
-**Peso nativo de Lloyd (build-time):**
-
-```c
-/* 1 -> w = luminancia^gamma (favorece claros)
- * 0 -> w = (1 - luminancia)^gamma (favorece oscuros) */
-#ifndef STIPPLE_WEIGHT_BY_BRIGHTNESS
-#define STIPPLE_WEIGHT_BY_BRIGHTNESS 1
-#endif
-```
-
-Notas:
-
-- `defaultLloydStep` controla costo/calidad por iteración.
-- Con `STIPPLE_WEIGHT_BY_BRIGHTNESS==1`: `gamma>1` enfatiza zonas **claras**; con `0`: `gamma>1` enfatiza **oscuras**.
-
-## `include/image.h`
-
-**Rol:** carga y muestreo de imagen.
-
-### Tipo
-
-```c
-typedef struct {
-  int w, h;           /* dimensiones px */
-  int pitchPixels;    /* pitch/4 en RGBA32 */
-  Uint32 *pixels;     /* buffer RGBA8888 */
-  SDL_Surface *surface;
-} Image;
-```
-
-### Funciones
-
-```c
-bool  imageLoad(Image *img, const char *path);
-void  imageFree(Image *img);
-float sampleIntensity(const Image *img, int x, int y);
-float sampleIntensityBilinearUV(const Image *img, float u, float v);
-void  sampleRgbBilinearUV(const Image *img, float u, float v,
-                          Uint8 *r, Uint8 *g, Uint8 *b);
-```
-
-Notas:
-
-- `imageLoad` convierte a `SDL_PIXELFORMAT_RGBA32`.
-- Luma = Rec.709 en `[0..1]` sobre **RGB lineal** (se hace sRGB→lineal internamente).
-- `sample*UV` usa bilineal en `u,v ∈ [0,1]` (evita aliasing al mapear canvas↔imagen).
-
-## `include/stippling.h`
-
-**Rol:** estado/render de la nube de puntos.
-
-### Tipos
-
-```c
-typedef struct { float x, y; } Dot;
-
-typedef struct {
-  Dot *pts;
-  int  count, width, height;
-} Stippling;
-```
-
-### Funciones
-
-```c
-bool stipplingInit(Stippling *s, int n, int w, int h, unsigned seed);
-void stipplingFree(Stippling *s);
-
-/* Render “estilizado”: radio por brillo y color opcional de la imagen */
-void stipplingRenderStyled(const Stippling *s, SDL_Renderer *ren, int canvasW, int canvasH,
-                           const Image *img, float minR, float maxR,
-                           bool useColor, bool invertTheme);
-```
-
-Notas:
-
-- `stipplingRenderStyled`: radio por punto `radius = minR + (1 - luma)*(maxR - minR)`; si `useColor==true`, toma `r,g,b` bilineal de la imagen; `invertTheme` alterna base claro/oscuro en monocromo.
-
-## `include/lloyd.h`
-
-**Rol:** una iteración de Lloyd ponderada por imagen.
-
-```c
-bool lloydStep(const Image *img,
-               Stippling *s,
-               int w, int h,
-               int pixelStride,
-               float gamma);
-```
-
-- Muestrea el lienzo `(w×h)` cada `pixelStride` px; asigna cada muestra a su punto más cercano (acelerado por grilla) y acumula centroide con peso:
-
-  - si `STIPPLE_WEIGHT_BY_BRIGHTNESS==1`: `w = luminancia^gamma`;
-  - si `==0`: `w = (1 - luminancia)^gamma`.
-- Actualiza cada punto al centro de masa ponderado.
-
-**Coste aprox.:** `O((w/stride * h/stride) * k)`, `k` = puntos en celdas vecinas (grilla uniforme).
-
-## `include/voronoi.h`
-
-**Rol:** índice espacial (grilla uniforme) para vecino más cercano.
-
-### Tipo
-
-```c
-typedef struct {
-  int w,h, cell, cols, rows;
-  int *head; /* cols*rows, -1 si vacia */
-  int *next; /* s->count, enlaza puntos por celda */
-} UniformGrid;
-```
-
-### Funciones
-
-```c
-bool gridBuild(UniformGrid *g, int w, int h, int cell, const Stippling *s);
-void gridFree(UniformGrid *g);
-int  gridNearest(const UniformGrid *g, const Stippling *s, float x, float y, int ringMax);
-```
-
-Notas:
-
-- `gridBuild`: O(N). Reconstruir si los puntos se mueven mucho (cada iteración de Lloyd).
-- `gridNearest`: explora anillos de celdas hasta `ringMax`; retornar `-1` implica ampliar `ringMax` o fallback O(N).
+* **Entradas**: `path` (CSV), `header` (línea de encabezado), `rowfmt` (formato de fila) + varargs.
+* **Salidas**: —.
+* **Descripción**: crea/abre CSV y **apendea** una fila; escribe `header` solo si el archivo no existe o está vacío.
