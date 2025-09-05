@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include <math.h>
+#include <omp.h>
 #include "lloyd.h"
 #include "image.h"
 #include "stippling.h"
@@ -20,12 +21,6 @@
  *         modo brillo (debug):w = (lum)^gamma
  *     El modo activo se selecciona con STIPPLE_WEIGHT_BY_BRIGHTNESS.
  *   - Tras el barrido, cada punto se mueve al centro de masa de su celda.
- *
- * Paralelización (OpenMP):
- *   - Si se compila con soporte OpenMP y la variable de entorno STIPPLE_PARALLEL=1,
- *     el barrido (doble bucle y/x) se ejecuta en paralelo.
- *   - Para evitar condiciones de carrera al acumular por punto (sumX/Y/W), cada hilo
- *     usa acumuladores privados (buffers T×N) y se realiza una reducción final.
  *
  * Notas de diseño:
  *   - La búsqueda de vecino más cercano se acelera con una grilla uniforme
@@ -126,7 +121,6 @@ static inline int irand_range(unsigned *st, int hi)
  */
 bool lloydStep(const Image *img, Stippling *s, int W, int H, int step, float gamma)
 {
-  // Validación mínima
   if (!s || !s->pts || s->count <= 0 || W <= 0 || H <= 0)
     return false;
   if (!img || !img->pixels)
@@ -134,16 +128,10 @@ bool lloydStep(const Image *img, Stippling *s, int W, int H, int step, float gam
   if (step < 1)
     step = 1;
 
-  // Índice espacial para nearest-neighbor (grilla uniforme)
   UniformGrid g = (UniformGrid){0};
-  if (!gridBuild(&g, W, H, 32, s))
-  {
-    // Si la grilla falla, seguimos; gridNearest hará fallback a O(N) más abajo.
-  }
+  (void)gridBuild(&g, W, H, 32, s); /* si falla, gridNearest hace fallback */
 
   const int n = s->count;
-
-  // Buffers de acumulación (centroides ponderados)
   double *sumX = (double *)calloc((size_t)n, sizeof(double));
   double *sumY = (double *)calloc((size_t)n, sizeof(double));
   double *sumW = (double *)calloc((size_t)n, sizeof(double));
@@ -156,62 +144,85 @@ bool lloydStep(const Image *img, Stippling *s, int W, int H, int step, float gam
     return false;
   }
 
-  // Barrido del canvas en pasos de 'step'
-  for (int y = 0; y < H; y += step)
+  const int T = omp_get_max_threads();
+  double *sumXlocal = (double *)calloc((size_t)T * n, sizeof(double));
+  double *sumYlocal = (double *)calloc((size_t)T * n, sizeof(double));
+  double *sumWlocal = (double *)calloc((size_t)T * n, sizeof(double));
+  if (!sumXlocal || !sumYlocal || !sumWlocal)
   {
-    float v = ((float)y + 0.5f) / (float)H; // UV centrado en el píxel
+    free(sumXlocal);
+    free(sumYlocal);
+    free(sumWlocal);
+    free(sumX);
+    free(sumY);
+    free(sumW);
+    gridFree(&g);
+    return false;
+  }
 
-    for (int x = 0; x < W; x += step)
-    {
-      float u = ((float)x + 0.5f) / (float)W; // UV centrado en el píxel
+#pragma omp parallel
+  {
+    const int tid = omp_get_thread_num();
+    double *sx = sumXlocal + (size_t)tid * n;
+    double *sy = sumYlocal + (size_t)tid * n;
+    double *sw = sumWlocal + (size_t)tid * n;
 
-      // Luminancia bilineal (Rec.709, en lineal)
-      float lum = sampleIntensityBilinearUV(img, u, v);
+#pragma omp for collapse(2) schedule(static)
+    for (int y = 0; y < H; y += step)
+      for (int x = 0; x < W; x += step)
+      {
+        const float v = ((float)y + 0.5f) / (float)H;
+        const float u = ((float)x + 0.5f) / (float)W;
 
-      // Peso según modo de compilación
-      double w;
+        const float lum = sampleIntensityBilinearUV(img, u, v);
+
+        double w;
 #if STIPPLE_WEIGHT_BY_BRIGHTNESS
-      // Favorece zonas claras (comportamiento “debug/nativo”)
-      w = pow(fmax(0.0, lum), (double)gamma);
+        w = pow(fmax(0.0, lum), (double)gamma);
 #else
-      // Favorece zonas oscuras (modo clásico)
-      w = pow(fmax(0.0, 1.0 - lum), (double)gamma);
+        w = pow(fmax(0.0, 1.0 - lum), (double)gamma);
 #endif
+        if (w <= 0.0)
+          continue;
 
-      if (w <= 0.0)
-      {
-        continue; // sin aporte
-      }
-
-      // NN por grilla (anillo 0..2 suele bastar)
-      int best = gridNearest(&g, s, (float)x, (float)y, 2);
-      if (best < 0)
-      {
-        // Fallback O(N) si la celda/anillos estaban vacíos
-        best = 0;
-        float bestD2 = 1e30f;
-        for (int i = 0; i < n; i++)
+        int best = gridNearest(&g, s, (float)x, (float)y, 2);
+        if (best < 0)
         {
-          float dx = (float)x - s->pts[i].x;
-          float dy = (float)y - s->pts[i].y;
-          float d2 = dx * dx + dy * dy;
-          if (d2 < bestD2)
+          best = 0;
+          float bestD2 = 1e30f;
+          for (int i = 0; i < n; ++i)
           {
-            bestD2 = d2;
-            best = i;
+            const float dx = (float)x - s->pts[i].x;
+            const float dy = (float)y - s->pts[i].y;
+            const float d2 = dx * dx + dy * dy;
+            if (d2 < bestD2)
+            {
+              bestD2 = d2;
+              best = i;
+            }
           }
         }
-      }
 
-      // Acumulación ponderada para el punto ganador
-      sumX[best] += (double)x * w;
-      sumY[best] += (double)y * w;
-      sumW[best] += w;
+        sx[best] += (double)x * w;
+        sy[best] += (double)y * w;
+        sw[best] += w;
+      }
+  } /* parallel */
+
+  for (int t = 0; t < T; ++t)
+  {
+    const double *sx = sumXlocal + (size_t)t * n;
+    const double *sy = sumYlocal + (size_t)t * n;
+    const double *sw = sumWlocal + (size_t)t * n;
+    for (int i = 0; i < n; ++i)
+    {
+      sumX[i] += sx[i];
+      sumY[i] += sy[i];
+      sumW[i] += sw[i];
     }
   }
 
-  // Actualización de centroides
-  for (int i = 0; i < n; i++)
+  for (int i = 0; i < n; ++i)
   {
     if (sumW[i] > 0.0)
     {
@@ -220,30 +231,26 @@ bool lloydStep(const Image *img, Stippling *s, int W, int H, int step, float gam
     }
   }
 
-  // Re-seed de huérfanos (sumW == 0): probar posiciones aleatorias con peso > ε
-  unsigned st = (unsigned)(n ^ W ^ H) + 0x9E3779B9u; // semilla base reproducible
-  for (int i = 0; i < n; i++)
+  unsigned st = (unsigned)(n ^ W ^ H) + 0x9E3779B9u;
+  for (int i = 0; i < n; ++i)
   {
     if (sumW[i] > 0.0)
       continue;
-
-    const int maxTries = 64; // intentos razonables
+    const int maxTries = 64;
     for (int t = 0; t < maxTries; ++t)
     {
-      int rx = irand_range(&st, W);
-      int ry = irand_range(&st, H);
-      float u = ((float)rx + 0.5f) / (float)W;
-      float v = ((float)ry + 0.5f) / (float)H;
-      float lum = sampleIntensityBilinearUV(img, u, v);
-
-      double w =
+      const int rx = irand_range(&st, W);
+      const int ry = irand_range(&st, H);
+      const float u = ((float)rx + 0.5f) / (float)W;
+      const float v = ((float)ry + 0.5f) / (float)H;
+      const float lum = sampleIntensityBilinearUV(img, u, v);
+      const double w =
 #if STIPPLE_WEIGHT_BY_BRIGHTNESS
           pow(fmaxf(0.0f, lum), (double)gamma);
 #else
           pow(fmaxf(0.0f, 1.0f - lum), (double)gamma);
 #endif
-
-      if (w > 1e-6) // pequeño umbral para evitar blancos puros (o negros en modo brillo)
+      if (w > 1e-6)
       {
         s->pts[i].x = (float)rx;
         s->pts[i].y = (float)ry;
@@ -252,11 +259,12 @@ bool lloydStep(const Image *img, Stippling *s, int W, int H, int step, float gam
     }
   }
 
-  // Limpieza
+  free(sumXlocal);
+  free(sumYlocal);
+  free(sumWlocal);
   free(sumX);
   free(sumY);
   free(sumW);
   gridFree(&g);
-
   return true;
 }
