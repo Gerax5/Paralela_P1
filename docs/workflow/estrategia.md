@@ -1,127 +1,101 @@
-# Propuesta Técnica de Paralelización para *Voronoi Stippling*
+# Estrategia de paralelización
 
-## 1. Secuencial vs. Paralelizable
+## 1. Siembra inicial de puntos (paralelo por datos)
 
-### Secuencial (no paralelizable)
+**Qué**: paralelizamos la inicialización de la nube de puntos `N` (cada iteración escribe en `pts[i]`, sin dependencias).
 
-- **Lectura de la imagen de entrada** y conversión a escala de grises -> paso único, depende de librerías externas.
-- **Inicialización de puntos aleatorios** (semilla inicial). Necesita un orden controlado para reproducibilidad.
-- **Actualización global de parámetros** (convergencia, control de iteraciones, ajuste de radios).
-- **Sincronización final de cada iteración** -> debe esperar a que todos los hilos terminen antes de avanzar.
+**Dónde**: `stippling_parallel.c`
 
-### Paralelizable (candidatos fuertes)
+- **Bucle paralelo**: `#pragma omp parallel for schedule(static)` sobre `i = 0..n-1`.
 
-- **Cálculo del diagrama de Voronoi:**
-  
-  Evaluar para cada píxel qué punto (stipple) le corresponde -> altamente paralelizable (SIMD/MIMD).
+  - **Técnica**: *parallel for* con *schedule(static)* (trabajo uniforme); no se requieren atómicos/barreras porque cada hilo escribe un índice distinto.
 
-- **Cálculo de centroides ponderados:**
+## 2. Construcción de grilla uniforme (CSR) para NN — paralelizada + atomics + SIMD
 
-  Sumar coordenadas de píxeles en cada celda, aplicando peso según intensidad de la imagen. Cada celda puede acumularse en paralelo.
+**Qué**: construir el índice (CSR) para acelerar la búsqueda de vecino más cercano.
 
-- **Reubicación de puntos (Lloyd’s algorithm):**
+**Dónde**: `voronoi_parallel.c`
 
-  Puede hacerse en paralelo por cada punto.
+1. **Conteo por celda** (evitar colisiones con `atomic update`)
 
-- **Escalamiento de radios y anisotropía:**
+   - Bucle paralelo sobre puntos (calcula celda y **suma 1** con atómico).
+   - Líneas: `#pragma omp parallel for` + `#pragma omp atomic update`.
 
-  Cada stipple aplica su propio factor -> paralelismo por dato.
+2. **Reinicialización en paralelo** (reusar `cellCount` como contadores)
 
-## 2. Estrategias de paralelización
+   - Líneas: `#pragma omp parallel for`.
 
-- **Paralelismo de datos (SIMD + MIMD)**:
-  Cada píxel del área de la imagen puede evaluarse en paralelo para asignarse a un punto Voronoi.
-  
-  -> Justificación: el cálculo es independiente por píxel.
+3. **Dispersion de índices en rangos CSR** (reserva *slot* con `atomic capture`)
 
-- **Reducciones en paralelo:**
-  Para calcular centroides se necesitan sumatorias -> usar `reduction(+:var)` de OpenMP.
-  
-  -> Justificación: evita condiciones de carrera y es más eficiente que `critical`.
+   - Cada hilo obtiene un **índice único** dentro del rango de su celda y escribe el id de punto.
+   - Líneas: `#pragma omp parallel for` + `#pragma omp atomic capture`.
 
-- **Paralelismo por tareas (OpenMP sections):**
-  Diferentes fases (dibujar puntos, dibujar líneas, guardar resultados) pueden dividirse en secciones si se procesan en la misma iteración.
-  
-  -> Justificación: balancea cómputo heterogéneo.
+4. **Nearest neighbor vectorizado** (SIMD dentro de una celda)
 
-## 3. Directivas de OpenMP y estructuras de datos
+   - Se usa `#pragma omp simd` para recorrer candidatos contiguos en memoria (**no** crea hilos nuevos; vectoriza registros en un hilo).
+   - Líneas: `#pragma omp simd` y la reducción de mínimo con índice.
 
-- **Regiones paralelas por bucle:**
+**Técnicas usadas**: *parallel for* + **atomic update/capture** (consistencia sin *critical*), **SIMD** (vectorización), *schedule(static)* (trabajo uniforme por punto/celda).
 
-  ```c
-  #pragma omp parallel for schedule(dynamic) reduction(+:sumX, sumY, count)
-  for (int i = 0; i < pixels; i++) { ... }
-  ```
+**Sincronía**: las regiones `parallel for` tienen barrera implícita al final; los atómicos garantizan coherencia en los contadores.
 
-  - `parallel for`: distribuir iteraciones de cálculo de celdas.
-  - `reduction`: acumular coordenadas sin race conditions.
-  - `schedule(dynamic)`: balancea carga porque algunas celdas tendrán más píxeles que otras.
+## 3. Iteración de Lloyd (paralela con acumuladores por hilo + reducción T$\times$N->N)
 
-- **Secciones para tareas diferenciadas:**
+**Qué**: barrido del canvas (2D), acumulando centroide ponderado para el **punto Voronoi ganador**.
 
-  ```c
-  #pragma omp parallel sections
-  {
-    #pragma omp section
-    render_points();
-    #pragma omp section
-    render_voronoi();
-  }
-  ```
+**Dónde**: `lloyd_parallel.c` (versión paralela pura)
 
-  - Justificación: separa lógica de renderizado y cálculo.
+1. **Buffers locales por hilo** (evitar *false sharing* y atómicos por píxel)
 
-- **Estructuras de datos recomendadas:**
+   - Se reserva un bloque **T$\times$N** y cada hilo usa su *slice* `tid*n .. (tid+1)*n`.
+   - Líneas: reserva de *locales* y chequeos.
 
-  - Arreglos contiguos (`float*`, `int*`) para centroides y acumuladores -> favorece vectorización SIMD.
-  - Buffers temporales por hilo (`private`) para evitar bloqueos.
-  - Uso de `reduction` en vez de `critical` o `atomic` para sumar intensidades.
+2. **Región paralela + bucle 2D colapsado**
 
-## 4. Posibles mejoras de diseño
+   - *Thread-private* para `sx/sy/sw` (punteros que apuntan al *slice* del hilo).
+   - `#pragma omp parallel` + `#pragma omp for collapse(2) schedule(static)` para recorrer `(y,x)` con stride `step`.
+   - Líneas: *parallel region*, *scoping por hilo* y *for collapse(2)*.
+   - La parte de **muestreo** y **NN** ocurre dentro del bucle 2D; la **acumulación** va solo al *slice* local del hilo (no hay *atomic*).
 
-- **Bloques de imagen (tiling):** dividir la imagen en regiones cuadradas -> cada hilo procesa un bloque completo de píxeles. Reduce cache misses.
-- **Vectorización:** aprovechar SIMD (SSE/AVX) para calcular distancias cuadradas `(dx*dx + dy*dy)` en batch.
-- **Incremental refinement:** iniciar con menos puntos y aumentarlos gradualmente (como sugiere la doc de Hufstedler). Esto reduce el coste inicial y escala mejor en paralelo.
-- **Uso de `guided schedule`:** en fases iniciales donde hay muchos puntos pesados, reduce overhead dinámico.
+3. **Reducción T$\times$N -> N** (serial, fuera de la región)
 
-## 5. Justificación técnica
+   - Un único hilo combina los *slices* (sumas) en `sumX/sumY/sumW`.
+   - Líneas: lazo externo en `t` y lazo interno en `i`.
 
-- **Por qué `parallel for` y no `sections` para el Voronoi:**
+4. **Actualizar centroides**
 
-  El cálculo de distancias y asignación es homogéneo y masivo, ideal para dividir iteraciones.
+   - Divide (sum / peso) por punto; solo para aquellos con `sumW>0`.
+   - Líneas: actualización de `pts[i]`.
 
-- **Por qué `reduction` y no `critical`:**
+5. **Re-seed de huérfanos** (determinista; no paralelo)
 
-  `critical` genera un cuello de botella en acumulaciones. `reduction` escala mucho mejor porque combina resultados al final.
+   - Si `sumW[i]==0`, se prueba aleatorio en zonas con peso > 0.
+   - Líneas: *fallback* de re-siembra controlada.
 
-- **Por qué datos contiguos y no listas enlazadas:**
+**Técnicas usadas**: *parallel region* + *for collapse(2)* + *schedule(static)*, **buffers privados por hilo** (evita atómicos/critical), **reducción manual**.
 
-  El acceso aleatorio penaliza el rendimiento en paralelo. Arreglos lineales favorecen cache y SIMD.
+**Sincronía**: barrera **implícita** al salir de la región paralela; **no** hay `atomic/critical` en la acumulación por pixel.
 
-- **Por qué iniciar con tiling:**
+**Scoping**: `sx/sy/sw` son **privados** por estar definidos dentro de la región (`tid` privado); el arreglo global `sumX/Y/W` solo se toca en la **reducción**.
 
-  Permite aprovechar coherencia espacial, especialmente en imágenes grandes.
+## 4. Resumen — Mapa "técnica -> archivo -> líneas"
 
-## Ejemplo práctico de paralelización
+| Técnica                                                            | Archivo                | Líneas |
+| ------------------------------------------------------------------ | ---------------------- | ------ |
+| Siembra paralela de `N` puntos (`parallel for`)                    | `stippling_parallel.c` |        |
+| CSR: conteo por celda (`parallel for` + `atomic update`)           | `voronoi_parallel.c`   |        |
+| CSR: reinicio contadores (`parallel for`)                          | `voronoi_parallel.c`   |        |
+| CSR: dispersión a `cellPoints` (`parallel for` + `atomic capture`) | `voronoi_parallel.c`   |        |
+| NN por celda: vectorización                                        | `voronoi_parallel.c`   |        |
+| Lloyd: buffers por hilo (T$\times$N)                                      | `lloyd_parallel.c`     |        |
+| Lloyd: región paralela + `for collapse(2)`                         | `lloyd_parallel.c`     |        |
+| Lloyd: acumulación local sin atómicos                              | `lloyd_parallel.c`     |        |
+| Lloyd: reducción T$\times$N->N (serial)                                    | `lloyd_parallel.c`     |        |
+| Lloyd: actualizar centroides                                       | `lloyd_parallel.c`     |        |
+| Lloyd: re-seed huérfanos                                           | `lloyd_parallel.c`     |        |
 
-```c
-#pragma omp parallel for schedule(dynamic) reduction(+:cx, cy, w)
-for (int y = 0; y < H; y++) {
-    for (int x = 0; x < W; x++) {
-        int nearest = find_nearest_stipple(x,y,stipples);
-        float weight = 1.0f - image[y][x]; // oscuridad
-        cx[nearest] += x * weight;
-        cy[nearest] += y * weight;
-        w[nearest]  += weight;
-    }
-}
-```
+## 5. Qué NO usamos y por qué
 
-- Cada hilo calcula asignaciones independientes.
-- Reducciones acumulan resultados por celda.
-- Posteriormente, los puntos se actualizan con:
-
-  ```c
-  px[i] = cx[i]/w[i];
-  py[i] = cy[i]/w[i];
-  ```
+- **`critical`/`atomic` en el barrido de píxeles**: evitados a propósito para no crear contención; en su lugar, **acumuladores por hilo** (T$\times$N) + **reducción** posterior. (Véase disposición por *slices* en T$\times$N).
+- **Barrera explícita**: no es necesaria; la **salida** de la región `parallel` ya hace de sincronía antes de la reducción.
+- **`reduction(...)` directo sobre arreglos**: no se usa porque la reducción estándar de OpenMP no reduce **arreglos largos** sin *declare reduction* personalizado; la reducción manual en C es clara, portable y evita overhead.
