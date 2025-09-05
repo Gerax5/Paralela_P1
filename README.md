@@ -17,6 +17,36 @@ Incluye versión **secuencial** y **paralela (OpenMP)** para pruebas de rendimie
 └── tests/              # scripts y benchmarks
 ```
 
+## 📦 Requisitos e Instalación
+
+### Requisitos
+
+* Ubuntu / WSL (o Linux con GCC)
+* Paquetes de desarrollo de **SDL2**
+* Dependencias para compilación y pruebas
+
+### Instalación
+
+1. Asegúrate de tener las utilidades necesarias:
+
+```bash
+sudo apt-get install dos2unix
+dos2unix tests/*.sh
+```
+
+2. Instala dependencias:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y build-essential libsdl2-dev libsdl2-image-dev fonts-jetbrains-mono libsdl2-ttf-dev
+```
+
+3. Da permisos de ejecución a los scripts de prueba:
+
+```bash
+chmod +x tests/*.sh
+```
+
 ## ⚙️ Compilación
 
 Compilar con:
@@ -103,7 +133,6 @@ En `tests/` tienes scripts para automatizar pruebas:
 Ejecuta secuencial y paralelo para distintos valores de **N**.
 
 ```bash
-chmod +x tests/*.sh
 ./tests/bench.sh --n-start 2000 --n-end 6000 --n-step 2000 --iters 100 --img images/input/doge.png
 ```
 
