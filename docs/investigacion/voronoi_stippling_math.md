@@ -101,4 +101,4 @@ Así la densidad de puntos representa la luminosidad de la imagen.
 | Multiplicative weights | Euclidiana escalada por $s = 1 / r_i$ | Incluido en cálculo Voronoi |
 | Anisotropic            | Distorsión por $\alpha, \theta$       | Incluido en cálculo Voronoi |
 
-[1]: https://estebanhufstedler.com/2020/01/11/modfied-voronoi-diagrams-and-stippling/?utm_source=chatgpt.com "Modfied Voronoi Diagrams and Stippling – Extra Polynymous"
+[1]: https://estebanhufstedler.com/2020/01/11/modfied-voronoi-diagrams-and-stippling/ "Modfied Voronoi Diagrams and Stippling – Extra Polynymous"
